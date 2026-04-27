@@ -222,13 +222,14 @@ def style_status_table(df: pd.DataFrame):
             return "background-color: #FFC7CE; color: #9C0006;"
         return ""
 
-    # ใช้ .map() สำหรับ Pandas เวอร์ชันใหม่ และ fallback กลับไปใช้ .applymap() สำหรับเวอร์ชันเก่า
-    style_mapper = getattr(df.style, "map", df.style.applymap)
+    # ตรวจสอบว่ามีคอลัมน์ 'สถานะ' หรือไม่
+    subset_cols = ['สถานะ'] if "สถานะ" in df.columns else None
     
-    if "สถานะ" in df.columns:
-        return style_mapper(highlight, subset=['สถานะ'])
+    # ใช้ .map() สำหรับ Pandas เวอร์ชันใหม่ และ .applymap() สำหรับเวอร์ชันเก่า
+    if hasattr(df.style, "map"):
+        return df.style.map(highlight, subset=subset_cols)
     else:
-        return style_mapper(highlight)
+        return df.style.applymap(highlight, subset=subset_cols)
 
 # -------------------------
 # UI Tabs
