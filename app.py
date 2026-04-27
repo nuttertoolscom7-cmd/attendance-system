@@ -27,9 +27,15 @@ def set_thai_font():
     # แนะนำ: ถ้านำไป Deploy บน Cloud ให้นำไฟล์ฟอนต์มาวางในโฟลเดอร์เดียวกับโค้ด แล้วเปลี่ยนชื่อให้ตรงกัน
     local_font_path = "THSarabunNew.ttf" 
     if os.path.exists(local_font_path):
-        fm.fontManager.addfont(local_font_path)
-        plt.rcParams['font.family'] = "TH Sarabun New"
-        return "TH Sarabun New"
+        try:
+            fm.fontManager.addfont(local_font_path)
+            prop = fm.FontProperties(fname=local_font_path)
+            font_name = prop.get_name()
+            plt.rcParams['font.family'] = font_name
+            return font_name
+        except Exception as e:
+            # หากโหลดฟอนต์ไม่ได้ให้ข้ามไปใช้ฟอนต์ระบบแทน
+            pass
 
     # กรณีหาไฟล์ฟอนต์ในโฟลเดอร์ไม่เจอ จะค้นหาจากระบบปฏิบัติการ (OS) แทน
     preferred = ["TH Sarabun New", "Sarabun", "Noto Sans Thai", "Tahoma", "DejaVu Sans"]
