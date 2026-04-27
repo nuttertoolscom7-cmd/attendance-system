@@ -157,10 +157,43 @@ def process_pdf(file):
                     left = line_norm[:date_match.start()].strip()
                     right = line_norm[date_match.end():].strip()
 
-                    # ดึงเวลาเข้า-ออก โดยใช้เวลาสุดท้ายของการสแกนเป็นเวลาออก
+                    # ดึงเวลาเข้า-ออก โดยพิจารณาจากตำแหน่งและค่าของเวลา
                     times = re.findall(r'\d{1,2}:\d{2}', right)
-                    check_in = times[0] if len(times) >= 1 else None
-                    check_out = times[-1] if len(times) >= 2 else None
+                    
+                    check_in = None
+                    check_out = None
+                    
+                    if len(times) >= 3:
+                        # มี 3 เวลา: (เข้า, ออก, สาย)
+                        check_in = times[0]
+                        check_out = times[1]
+                    elif len(times) == 2:
+                        try:
+                            h1 = int(times[0].split(':')[0])
+                            # กรณีพิเศษ: ถ้าตัวที่สองคือ 01:00 (ค่าปรับลืมสแกน)
+                            if times[1] == "01:00":
+                                if h1 >= 12: # ถ้าเวลาแรกคือช่วงบ่าย แสดงว่าคือเวลา "ออกงาน"
+                                    check_out = times[0]
+                                    check_in = None
+                                else: # ถ้าเวลาแรกคือช่วงเช้า แสดงว่าคือเวลา "เข้างาน"
+                                    check_in = times[0]
+                                    check_out = None
+                            else:
+                                # กรณีทั่วไปที่มี 2 เวลา ให้สันนิษฐานว่าเป็น (เข้า, ออก)
+                                check_in = times[0]
+                                check_out = times[1]
+                        except:
+                            check_in = times[0]
+                            check_out = times[1]
+                    elif len(times) == 1:
+                        try:
+                            h1 = int(times[0].split(':')[0])
+                            if h1 >= 12:
+                                check_out = times[0]
+                            else:
+                                check_in = times[0]
+                        except:
+                            check_in = times[0]
 
                     # Logic กำหนดสถานะ
                     if not check_in and not check_out:
@@ -179,13 +212,6 @@ def process_pdf(file):
                                 status = "ปกติ"
                         except:
                             status = "ปกติ"
-
-                    # แก้ปัญหา "สาย 01:00" จาก PDF (ตามโค้ดเดิมของคุณ)
-                    if "01:00" in right:
-                        if not check_in and check_out:
-                            status = "ลืมสแกนนิ้วเข้า"
-                        elif check_in and not check_out:
-                            status = "ลืมสแกนนิ้วออก"
 
                     # แยกชื่อ/แผนก
                     dept, name = "", left
