@@ -83,19 +83,25 @@ def df_to_excel_bytes(pivot: pd.DataFrame, df_all: pd.DataFrame):
         workbook  = writer.book
         worksheet = writer.sheets["Summary"]
 
-        # ฟอร์แมตเซลล์ปกติ
+        # ใช้ Tahoma เป็นฟอนต์หลักเพราะเป็นมาตรฐานและแสดงผลไทยได้เสถียรที่สุดใน Excel
+        base_font = 'Tahoma' 
+
         base_format = workbook.add_format({
-            'font_name': 'TH Sarabun New',
-            'font_size': 14,
+            'font_name': base_font,
+            'font_size': 11,
             'align': 'center',
             'valign': 'vcenter',
             'border': 1
         })
 
-        for row in range(len(pivot)+3):
+        # จัดการหัวตารางและข้อมูล
+        for row in range(len(pivot) + 3):
             worksheet.set_row(row, 20, base_format)
-        for col in range(len(pivot.columns)+1):
-            worksheet.set_column(col, col, 15, base_format)
+        
+        # ปรับความกว้างคอลัมน์ชื่อ-สกุลให้กว้างขึ้นเป็นพิเศษ
+        worksheet.set_column(0, 0, 30, base_format) 
+        if len(pivot.columns) > 0:
+            worksheet.set_column(1, len(pivot.columns), 10, base_format)
 
         # จัดการหัวตาราง (ป้องกัน IndexError กรณีไม่มีข้อมูลวันที่)
         valid_dates = df_all['วันที่'].dropna()
@@ -107,12 +113,12 @@ def df_to_excel_bytes(pivot: pd.DataFrame, df_all: pd.DataFrame):
             month_th = "ไม่ระบุ"
             year_be = ""
 
-        header_text = f"ข้าราชการศูนย์ฝึกพาณิชย์นาวี\nประจำเดือน {month_th} {year_be}".strip()
+        header_text = f"รายงานการเข้า-ออกงาน\nประจำเดือน {month_th} {year_be}".strip()
 
         merge_format = workbook.add_format({
             'bold': True,
-            'font_name': 'TH Sarabun New',
-            'font_size': 16,
+            'font_name': base_font,
+            'font_size': 14,
             'align': 'center',
             'valign': 'vcenter'
         })
