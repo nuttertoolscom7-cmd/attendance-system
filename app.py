@@ -9,11 +9,25 @@ import re
 from io import BytesIO
 import plotly.express as px
 import holidays
+import unicodedata
 
 # -------------------------
-# ตั้งค่าหน้าเว็บ
+# ตั้งค่าหน้าเว็บและ CSS
 # -------------------------
 st.set_page_config(page_title="ระบบเข้า-ออกงาน (Pro)", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
+
+# ฉีด CSS เพื่อแก้ปัญหาสระลอยบนเบราว์เซอร์
+st.markdown("""
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700&display=swap');
+    html, body, [class*="css"], st.markdown, p, div, span, table, td, th {
+        font-family: 'Sarabun', 'Tahoma', sans-serif !important;
+    }
+    .stDataFrame {
+        font-family: 'Sarabun', 'Tahoma', sans-serif !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
 # -------------------------
 # ตั้งค่า Sidebar (Settings)
@@ -46,13 +60,10 @@ th_holidays = holidays.Thailand(years=[current_year, current_year + 1])
 # ฟังก์ชันตรวจสอบวันหยุด
 # -------------------------
 def is_it_holiday(dt, exclude_weekends, exclude_th_holidays, extra_list):
-    # ตรวจสอบเสาร์-อาทิตย์
     if exclude_weekends and dt.weekday() >= 5:
         return True
-    # ตรวจสอบวันหยุดไทย
     if exclude_th_holidays and dt in th_holidays:
         return True
-    # ตรวจสอบวันหยุดเพิ่มเติม
     if dt.date() in extra_list:
         return True
     return False
@@ -75,28 +86,27 @@ def set_thai_font():
 
 _used_font = set_thai_font()
 
-import unicodedata
-
 # -------------------------
 # Utilities
 # -------------------------
 def normalize_whitespace(s: str) -> str:
     if s is None: return ""
-    # 1. ล้างตัวอักษรล่องหน
-    s = re.sub(r'[\u200b\ufeff\xa0]', '', s)
+    # 1. ล้างตัวอักษรล่องหนและวงกลมประ (Dotted Circle U+25CC)
+    s = re.sub(r'[\u200b\ufeff\xa0\u25cc]', '', s)
     
     # 2. แก้ปัญหาสระลอย: ลบช่องว่างที่อยู่ระหว่างพยัญชนะกับสระ/วรรณยุกต์
-    # ช่วงอักขระภาษาไทย: พยัญชนะ (ก-ฮ) [\u0E01-\u0E2E]
-    # ช่วงอักขระภาษาไทย: สระบน/ล่าง/วรรณยุกต์ [\u0E31\u0E34-\u0E3A\u0E47-\u0E4E]
     s = re.sub(r'([\u0E01-\u0E2E])\s+([\u0E31\u0E34-\u0E3A\u0E47-\u0E4E])', r'\1\2', s)
     
-    # 3. ลบช่องว่างระหว่างสระกับวรรณยุกต์ (กรณีแยกมา 2 ตัว)
+    # 3. ลบช่องว่างระหว่างสระกับวรรณยุกต์
     s = re.sub(r'([\u0E31\u0E34-\u0E3A\u0E47-\u0E4E])\s+([\u0E31\u0E34-\u0E3A\u0E47-\u0E4E])', r'\1\2', s)
+
+    # 4. สลับลำดับกรณี วรรณยุกต์มาก่อนสระ (PDF บางตัวดึงมาผิดลำดับ)
+    s = re.sub(r'([\u0E48-\u0E4B])([\u0E31\u0E34-\u0E39])', r'\2\1', s)
     
-    # 4. จัดการ Unicode ให้เป็นรูปแบบมาตรฐาน
+    # 5. จัดการ Unicode ให้เป็นรูปแบบมาตรฐาน
     s = unicodedata.normalize('NFC', s)
     
-    # 5. จัดการช่องว่างทั่วไป
+    # 6. จัดการช่องว่างทั่วไป
     s = re.sub(r'\s+', ' ', s)
     return s.strip()
 
