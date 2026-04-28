@@ -169,7 +169,8 @@ def process_pdf(file, late_threshold, exc_week, exc_th, extra_list):
     try:
         with pdfplumber.open(file) as pdf:
             for pageno, page in enumerate(pdf.pages, start=1):
-                text = page.extract_text()
+                # ใช้ x_tolerance และ y_tolerance เพื่อช่วยรวมสระ/วรรณยุกต์ไทยไม่ให้แตกกระจาย
+                text = page.extract_text(x_tolerance=3, y_tolerance=3)
                 if not text: continue
                 lines = [ln.strip() for ln in text.split('\n') if ln.strip()]
                 for line in lines:
