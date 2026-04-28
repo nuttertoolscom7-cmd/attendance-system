@@ -16,15 +16,20 @@ import unicodedata
 # -------------------------
 st.set_page_config(page_title="ระบบเข้า-ออกงาน (Pro)", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
 
-# ฉีด CSS เพื่อแก้ปัญหาสระลอยบนเบราว์เซอร์
+# ฉีด CSS เพื่อแก้ปัญหาสระลอยและจัดฟอนต์เฉพาะส่วนเนื้อหา (ไม่ให้กระทบ UI หลัก)
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700&display=swap');
-    html, body, [class*="css"], st.markdown, p, div, span, table, td, th {
+    
+    /* เน้นแก้เฉพาะส่วนที่เป็นตารางและข้อความบรรยาย */
+    .stMarkdown, .stTable, .stDataFrame, [data-testid="stMetricValue"] {
         font-family: 'Sarabun', 'Tahoma', sans-serif !important;
     }
-    .stDataFrame {
+    
+    /* ปรับแต่งตารางให้สระไม่ลอย */
+    td, th {
         font-family: 'Sarabun', 'Tahoma', sans-serif !important;
+        line-height: 1.6 !important;
     }
     </style>
     """, unsafe_allow_html=True)
