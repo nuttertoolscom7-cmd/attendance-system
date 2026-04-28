@@ -75,12 +75,18 @@ def set_thai_font():
 
 _used_font = set_thai_font()
 
+import unicodedata
+
 # -------------------------
 # Utilities
 # -------------------------
 def normalize_whitespace(s: str) -> str:
     if s is None: return ""
-    s = s.replace('\u200b', '')
+    # 1. จัดการ Unicode ให้เป็นรูปแบบมาตรฐาน (ช่วยเรื่องการรวมสระ/วรรณยุกต์)
+    s = unicodedata.normalize('NFC', s)
+    # 2. ล้างตัวอักษรล่องหนที่มักติดมาจาก PDF (Zero Width characters)
+    s = s.replace('\u200b', '').replace('\ufeff', '').replace('\xa0', ' ')
+    # 3. จัดการช่องว่างที่เกินมา
     s = re.sub(r'\s+', ' ', s)
     return s.strip()
 
