@@ -176,6 +176,133 @@ if uploaded_file is not None:
             else:
                 st.info("ไม่พบข้อมูลสำหรับสร้างกราฟจากตัวกรองที่เลือก")
 
+        # --- Batch Export Section ---
+        def generate_batch_report(df_to_export):
+            buffer = io.BytesIO()
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "ประวัติการลาทั้งหมด"
+            
+            font_bold = Font(bold=True, name='TH SarabunPSK', size=16)
+            font_normal = Font(name='TH SarabunPSK', size=16)
+            align_center = Alignment(horizontal='center', vertical='center')
+            align_left = Alignment(horizontal='left', vertical='center')
+            border = Border(
+                left=Side(border_style='thin', color='000000'),
+                right=Side(border_style='thin', color='000000'),
+                top=Side(border_style='thin', color='000000'),
+                bottom=Side(border_style='thin', color='000000')
+            )
+            fill_yellow = PatternFill(start_color='FFFF00', end_color='FFFF00', fill_type='solid')
+            fill_purple = PatternFill(start_color='C0A0C0', end_color='C0A0C0', fill_type='solid')
+            
+            row_num = 1
+            months_order = ['ตุลาคม', 'พฤศจิกายน', 'ธันวาคม', 'มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน']
+            
+            for person in sorted(df_to_export['Name'].unique()):
+                p_data = df_to_export[df_to_export['Name'] == person].sort_values(['BudgetYear', 'Month', 'Day'])
+                if p_data.empty: continue
+                
+                budget_years = p_data['BudgetYear'].unique()
+                target_year = budget_years[0] if len(budget_years) > 0 else '2568'
+                prev_year = int(target_year) - 1
+                
+                ws.cell(row=row_num, column=1, value=f"สรุปวันลาปีงบประมาณ (1 ตุลาคม {prev_year} - 30 กันยายน {target_year})").font = font_bold
+                ws.cell(row=row_num, column=1).alignment = align_center
+                ws.merge_cells(start_row=row_num, start_column=1, end_row=row_num, end_column=6)
+                row_num += 1
+                
+                ws.cell(row=row_num, column=1, value=person).font = font_bold
+                ws.cell(row=row_num, column=1).alignment = align_center
+                ws.merge_cells(start_row=row_num, start_column=1, end_row=row_num, end_column=6)
+                row_num += 1
+                
+                ws.cell(row=row_num, column=1, value="มีสิทธิลาป่วยโดยไม่ถูกหักค่าจ้าง 15 วัน").font = font_bold
+                ws.cell(row=row_num, column=1).alignment = align_center
+                ws.merge_cells(start_row=row_num, start_column=1, end_row=row_num, end_column=6)
+                row_num += 1
+                
+                headers = ['วัน เดือน ปี', 'ป่วย', 'กิจ', 'พักผ่อน', 'สาย', 'หมายเหตุ']
+                for col_num, header in enumerate(headers, 1):
+                    cell = ws.cell(row=row_num, column=col_num, value=header)
+                    cell.font = font_bold
+                    cell.alignment = align_center
+                    cell.border = border
+                row_num += 1
+                
+                sums = {'ลาป่วย': 0.0, 'ลากิจ': 0.0, 'ลาพักผ่อน': 0.0, 'สาย': 0.0}
+                
+                for _, row in p_data.iterrows():
+                    month = row['Month']
+                    month_idx = months_order.index(month) if month in months_order else 0
+                    year_str = str(prev_year) if month_idx < 3 else str(target_year)
+                    date_str = f"วันที่ {row['Day']} {month} {year_str}"
+                    
+                    ws.cell(row=row_num, column=1, value=date_str).alignment = align_center
+                    
+                    type_str = row['Type']
+                    is_half = row['IsHalf']
+                    val_str = 'ครึ่ง' if is_half else 1
+                    val_num = 0.5 if is_half else 1.0
+                    
+                    col_map = {'ลาป่วย': 2, 'ลากิจ': 3, 'ลาพักผ่อน': 4, 'สาย': 5}
+                    target_col = col_map.get(type_str, 2)
+                    if type_str in sums: sums[type_str] += val_num
+                    
+                    ws.cell(row=row_num, column=target_col, value=val_str).alignment = align_center
+                    for c in range(2, 6):
+                        if c != target_col: ws.cell(row=row_num, column=c, value='')
+                    ws.cell(row=row_num, column=6, value=row['Remarks']).alignment = align_left
+                    
+                    for c in range(1, 7):
+                        ws.cell(row=row_num, column=c).border = border
+                        ws.cell(row=row_num, column=c).font = font_normal
+                    row_num += 1
+                
+                ws.cell(row=row_num, column=1, value='รวมทั้งปีงบประมาณ').alignment = align_center
+                ws.cell(row=row_num, column=1).font = font_bold
+                ws.cell(row=row_num, column=1).border = border
+                ws.cell(row=row_num, column=1).fill = fill_yellow
+                
+                def format_sum(s):
+                    if s == 0: return ""
+                    int_part = int(s)
+                    if s == int_part: return str(int_part)
+                    if int_part == 0: return "ครึ่ง"
+                    return f"{int_part}ครึ่ง"
+                
+                for i, key in enumerate(['ลาป่วย', 'ลากิจ', 'ลาพักผ่อน', 'สาย']):
+                    cell = ws.cell(row=row_num, column=i+2, value=format_sum(sums[key]))
+                    cell.alignment = align_center
+                    cell.font = font_bold
+                    cell.border = border
+                    cell.fill = fill_purple
+                
+                ws.cell(row=row_num, column=6, value='').border = border
+                row_num += 1
+
+            ws.column_dimensions['A'].width = 25
+            ws.column_dimensions['B'].width = 8
+            ws.column_dimensions['C'].width = 8
+            ws.column_dimensions['D'].width = 12
+            ws.column_dimensions['E'].width = 8
+            ws.column_dimensions['F'].width = 30
+            
+            wb.save(buffer)
+            return buffer.getvalue()
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        col_batch, _ = st.columns([1, 2])
+        with col_batch:
+            st.download_button(
+                label="📥 ดาวน์โหลดรายงานรายบุคคลแบบทั้งหมด (Excel)",
+                data=generate_batch_report(filtered_df),
+                file_name="รายงานการลา_ทั้งหมด.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                type="primary"
+            )
+
         # --- Individual Search Section ---
         st.markdown("---")
         st.markdown("### 🔍 เจาะลึกรายบุคคล")
