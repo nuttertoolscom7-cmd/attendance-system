@@ -280,8 +280,8 @@ if uploaded_file is not None:
                 ws.title = "ประวัติการลา"
                 
                 # Styles
-                font_bold = Font(bold=True, name='Sarabun', size=11)
-                font_normal = Font(name='Sarabun', size=11)
+                font_bold = Font(bold=True, name='TH SarabunPSK', size=16)
+                font_normal = Font(name='TH SarabunPSK', size=16)
                 align_center = Alignment(horizontal='center', vertical='center')
                 align_left = Alignment(horizontal='left', vertical='center')
                 border = Border(

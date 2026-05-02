@@ -83,13 +83,18 @@ def load_data(file_source):
                         if color == 'FFFFFF00' or 'FFFF00' in color:
                             is_half = True
                     
+                    # Filter remarks: if the remark mentions 'ครึ่ง' but this day is not a half-day, omit the remark
+                    day_remark = remarks
+                    if 'ครึ่ง' in remarks and not is_half:
+                        day_remark = ""
+                    
                     all_details.append({
                         'Name': name,
                         'Month': month,
                         'Day': day_idx + 1,
                         'Type': leave_type,
                         'BudgetYear': budget_year,
-                        'Remarks': remarks,
+                        'Remarks': day_remark,
                         'IsHalf': is_half
                     })
                     
