@@ -264,7 +264,7 @@ if uploaded_file is not None:
                     return 'text-align: center;'
                     
                 st.dataframe(
-                    ui_df.style.applymap(style_center, subset=['ป่วย', 'กิจ', 'พักผ่อน', 'สาย']),
+                    ui_df.style.map(style_center, subset=['ป่วย', 'กิจ', 'พักผ่อน', 'สาย']) if hasattr(ui_df.style, "map") else ui_df.style.applymap(style_center, subset=['ป่วย', 'กิจ', 'พักผ่อน', 'สาย']),
                     use_container_width=True, 
                     hide_index=True
                 )
