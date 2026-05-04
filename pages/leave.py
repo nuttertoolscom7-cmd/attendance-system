@@ -311,8 +311,38 @@ if uploaded_file is not None:
             if not graph_data.empty:
                 pivot_graph = graph_data.pivot_table(index='Name', columns='Type', values='จำนวนวัน/ครั้ง', fill_value=0).reset_index()
                 buffer_graph = io.BytesIO()
-                with pd.ExcelWriter(buffer_graph, engine='openpyxl') as writer:
+                with pd.ExcelWriter(buffer_graph, engine='xlsxwriter') as writer:
                     pivot_graph.to_excel(writer, index=False, sheet_name='ข้อมูลกราฟ')
+                    
+                    workbook = writer.book
+                    worksheet = writer.sheets['ข้อมูลกราฟ']
+                    
+                    # Set column widths
+                    worksheet.set_column(0, 0, 30)
+                    if len(pivot_graph.columns) > 1:
+                        worksheet.set_column(1, len(pivot_graph.columns) - 1, 12)
+                    
+                    # Create a column chart object
+                    chart = workbook.add_chart({'type': 'column'})
+                    
+                    max_row = len(pivot_graph)
+                    # Add series for each leave type
+                    for i in range(1, len(pivot_graph.columns)):
+                        chart.add_series({
+                            'name':       ['ข้อมูลกราฟ', 0, i],
+                            'categories': ['ข้อมูลกราฟ', 1, 0, max_row, 0],
+                            'values':     ['ข้อมูลกราฟ', 1, i, max_row, i],
+                            'data_labels': {'value': True}
+                        })
+                        
+                    chart.set_x_axis({'name': 'รายชื่อบุคลากร'})
+                    chart.set_y_axis({'name': 'จำนวนวัน/ครั้ง'})
+                    chart.set_title({'name': 'เปรียบเทียบจำนวนครั้งการลาแยกตามบุคคล'})
+                    chart.set_size({'width': 900, 'height': 500})
+                    
+                    # Insert the chart to the right of the data
+                    chart_col = chr(ord('A') + len(pivot_graph.columns) + 1)
+                    worksheet.insert_chart(f'{chart_col}2', chart)
                 
                 st.download_button(
                     label="📊 ดาวน์โหลดข้อมูลกราฟ (Excel)",
