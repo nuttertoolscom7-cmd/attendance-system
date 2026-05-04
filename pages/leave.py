@@ -109,14 +109,16 @@ if uploaded_file is not None:
             df['BudgetYear'].isin(budget_year) & 
             df['Month'].isin(months) &
             df['Type'].isin(leave_types)
-        ]
+        ].copy()
+        
+        filtered_df['LeaveValue'] = filtered_df['IsHalf'].apply(lambda x: 0.5 if x else 1.0)
 
         # --- Metrics Summary ---
         st.markdown("### 📌 สรุปภาพรวม")
         col1, col2, col3, col4 = st.columns(4)
         
         def get_count(l_type):
-            return filtered_df[filtered_df['Type'] == l_type].shape[0]
+            return filtered_df[filtered_df['Type'] == l_type]['LeaveValue'].sum()
 
         # Use emoji icons for metrics
         col1.metric("🤒 ลาป่วย", f"{get_count('ลาป่วย')} ครั้ง")
@@ -144,7 +146,7 @@ if uploaded_file is not None:
 
         with tab2:
             st.markdown("#### 📈 เปรียบเทียบจำนวนครั้งการลาแยกตามบุคคล")
-            summary_by_person = filtered_df.groupby(['Name', 'Type']).size().reset_index(name='จำนวนครั้ง')
+            summary_by_person = filtered_df.groupby(['Name', 'Type'])['LeaveValue'].sum().reset_index(name='จำนวนครั้ง')
             
             if not summary_by_person.empty:
                 # Use professional color palette
@@ -292,7 +294,7 @@ if uploaded_file is not None:
             return buffer.getvalue()
 
         st.markdown("<br>", unsafe_allow_html=True)
-        col_batch, _ = st.columns([1, 2])
+        col_batch, col_graph, _ = st.columns([1.5, 1.5, 1])
         with col_batch:
             st.download_button(
                 label="📥 ดาวน์โหลดรายงานรายบุคคลแบบทั้งหมด (Excel)",
@@ -302,6 +304,23 @@ if uploaded_file is not None:
                 use_container_width=True,
                 type="primary"
             )
+            
+        with col_graph:
+            # Generate summary data for graph export
+            graph_data = filtered_df.groupby(['Name', 'Type'])['LeaveValue'].sum().reset_index(name='จำนวนวัน/ครั้ง')
+            if not graph_data.empty:
+                pivot_graph = graph_data.pivot_table(index='Name', columns='Type', values='จำนวนวัน/ครั้ง', fill_value=0).reset_index()
+                buffer_graph = io.BytesIO()
+                with pd.ExcelWriter(buffer_graph, engine='openpyxl') as writer:
+                    pivot_graph.to_excel(writer, index=False, sheet_name='ข้อมูลกราฟ')
+                
+                st.download_button(
+                    label="📊 ดาวน์โหลดข้อมูลกราฟ (Excel)",
+                    data=buffer_graph.getvalue(),
+                    file_name="สรุปข้อมูลกราฟ.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
 
         # --- Individual Search Section ---
         st.markdown("---")
@@ -325,9 +344,6 @@ if uploaded_file is not None:
             else:
                 # --- Calculate Detailed Summary ---
                 st.markdown("##### 📊 สรุปยอดการลา (แยกตามเดือน)")
-                
-                # Assign values: 0.5 for half-day, 1.0 for full-day
-                person_data['LeaveValue'] = person_data['IsHalf'].apply(lambda x: 0.5 if x else 1.0)
                 
                 # Group by BudgetYear, Month, and Type
                 monthly_summary = person_data.groupby(['BudgetYear', 'Month', 'Type'])['LeaveValue'].sum().reset_index()
