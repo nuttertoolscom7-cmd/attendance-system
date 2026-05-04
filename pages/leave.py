@@ -315,7 +315,8 @@ if uploaded_file is not None:
             )
         
         if selected_person != "-- เลือกรายชื่อ --":
-            person_data = df[df['Name'] == selected_person].sort_values(['BudgetYear', 'Month', 'Day'])
+            # Use filtered_df instead of df so sidebar filters apply here too
+            person_data = filtered_df[filtered_df['Name'] == selected_person].sort_values(['BudgetYear', 'Month', 'Day'])
             
             st.markdown(f"##### ประวัติของ: <span style='color:#1f77b4;'>{selected_person}</span>", unsafe_allow_html=True)
             
