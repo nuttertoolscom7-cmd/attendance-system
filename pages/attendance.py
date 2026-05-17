@@ -134,7 +134,7 @@ def df_to_excel_bytes(pivot: pd.DataFrame, df_all: pd.DataFrame):
         pivot.to_excel(writer, sheet_name="Summary", startrow=2, index=True)
         workbook  = writer.book
         worksheet = writer.sheets["Summary"]
-        base_font = 'Cordia New' 
+        base_font = 'TH SarabunPSK' 
         base_format = workbook.add_format({'font_name': base_font, 'font_size': 14, 'align': 'center', 'valign': 'bottom', 'border': 1})
         name_format = workbook.add_format({'font_name': base_font, 'font_size': 14, 'align': 'left', 'valign': 'bottom', 'border': 1})
         for row in range(len(pivot) + 3):
@@ -156,7 +156,7 @@ def daily_to_excel_bytes(df_day: pd.DataFrame, report_date):
         export_df = df_day[['แผนก', 'ชื่อ-สกุล', 'เข้างาน', 'ออกงาน', 'สถานะ']]
         export_df.to_excel(writer, sheet_name="Daily", startrow=2, index=False)
         workbook, worksheet = writer.book, writer.sheets["Daily"]
-        base_font = 'Cordia New' 
+        base_font = 'TH SarabunPSK' 
         base_format = workbook.add_format({'font_name': base_font, 'font_size': 14, 'align': 'center', 'valign': 'bottom', 'border': 1})
         name_format = workbook.add_format({'font_name': base_font, 'font_size': 14, 'align': 'left', 'valign': 'bottom', 'border': 1})
         header_format = workbook.add_format({'font_name': base_font, 'font_size': 14, 'bold': True, 'align': 'center', 'valign': 'bottom', 'border': 1, 'bg_color': '#D9D9D9'})
@@ -170,45 +170,106 @@ def daily_to_excel_bytes(df_day: pd.DataFrame, report_date):
 
 def missing_scan_to_excel_bytes(df_all: pd.DataFrame):
     output = BytesIO()
-    # Group by name and department, then count specific statuses
-    summary = df_all.groupby(['แผนก', 'ชื่อ-สกุล'])['สถานะ'].value_counts().unstack(fill_value=0)
     
-    # Ensure relevant columns exist
-    cols_of_interest = ['ลืมสแกนนิ้วเข้า', 'ลืมสแกนนิ้วออก', 'ขาดงาน']
-    for col in cols_of_interest:
-        if col not in summary.columns:
-            summary[col] = 0
-            
-    # Filter only those who have at least one issue
-    summary = summary[(summary['ลืมสแกนนิ้วเข้า'] > 0) | (summary['ลืมสแกนนิ้วออก'] > 0) | (summary['ขาดงาน'] > 0)]
-    summary = summary[cols_of_interest]
-    summary = summary.reset_index()
+    # 1. Prepare data
+    # Filter only relevant statuses
+    missing_statuses = ['ลืมสแกนนิ้วเข้า', 'ลืมสแกนนิ้วออก', 'ขาดงาน']
+    df_missing = df_all[df_all['สถานะ'].isin(missing_statuses)].copy()
+    
+    if df_missing.empty:
+        # Create an empty but structured Excel if no data
+        with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+            pd.DataFrame().to_excel(writer, sheet_name="Missing_Scans")
+        return output.getvalue()
+
+    # Function to format date detail
+    def format_detail(row):
+        d = row['วันที่']
+        status = row['สถานะ']
+        suffix = ""
+        if status == 'ลืมสแกนนิ้วเข้า': suffix = "(เวลาเข้า)"
+        elif status == 'ลืมสแกนนิ้วออก': suffix = "(เวลาออก)"
+        elif status == 'ขาดงาน': suffix = "(เข้าและออก)"
+        
+        month_name = month_name_thai(d.month)
+        year_be = d.year + 543
+        return f"วันที่ {d.day} {month_name} {year_be} {suffix}"
+
+    df_missing['detail'] = df_missing.apply(format_detail, axis=1)
+    
+    # Group by Dept and Name
+    grouped = df_missing.groupby(['แผนก', 'ชื่อ-สกุล']).agg({
+        'detail': lambda x: "\n".join(x),
+        'วันที่': 'count'
+    }).reset_index()
+    
+    # Rename columns to match template
+    grouped.columns = ['แผนก', 'ชื่อ - สกุล', 'วันที่ไม่พบข้อมูล', 'จำนวนวันที่ไม่พบข้อมูล']
+    
+    # Get metadata for header
+    valid_dates = df_all['วันที่'].dropna()
+    month_th = month_name_thai(int(valid_dates.dt.month.mode()[0])) if not valid_dates.empty else "ไม่ระบุ"
+    year_be_header = int(valid_dates.dt.year.mode()[0]) + 543 if not valid_dates.empty else ""
 
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        summary.to_excel(writer, sheet_name="Missing_Scans", startrow=2, index=False)
-        workbook, worksheet = writer.book, writer.sheets["Missing_Scans"]
-        base_font = 'Cordia New' 
-        base_format = workbook.add_format({'font_name': base_font, 'font_size': 14, 'align': 'center', 'valign': 'bottom', 'border': 1})
-        name_format = workbook.add_format({'font_name': base_font, 'font_size': 14, 'align': 'left', 'valign': 'bottom', 'border': 1})
-        header_format = workbook.add_format({'font_name': base_font, 'font_size': 14, 'bold': True, 'align': 'center', 'valign': 'bottom', 'border': 1, 'bg_color': '#FFC7CE'})
+        workbook = writer.book
+        worksheet = workbook.add_worksheet("Missing_Scans")
         
-        for row in range(len(summary) + 3): 
-            worksheet.set_row(row, 30, base_format)
+        # Formats
+        base_font = 'TH SarabunPSK'
+        title_format = workbook.add_format({'bold': True, 'font_name': base_font, 'font_size': 18, 'align': 'center'})
+        header_format = workbook.add_format({'bold': True, 'font_name': base_font, 'font_size': 14, 'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#D9D9D9'})
+        dept_format = workbook.add_format({'bold': True, 'font_name': base_font, 'font_size': 14, 'align': 'left', 'valign': 'vcenter', 'border': 1})
+        data_center_format = workbook.add_format({'font_name': base_font, 'font_size': 14, 'align': 'center', 'valign': 'vcenter', 'border': 1})
+        data_left_format = workbook.add_format({'font_name': base_font, 'font_size': 14, 'align': 'left', 'valign': 'vcenter', 'border': 1, 'text_wrap': True})
+        
+        # 1. Header Rows
+        worksheet.merge_range('A1:K1', "รายงานการสแกนนิ้วมือในการเข้า - ออกงานของเจ้าหน้าที่", title_format)
+        worksheet.merge_range('A2:K2', "ศูนย์ฝึกพาณิชย์นาวี", title_format)
+        worksheet.merge_range('A3:K3', f"ประจำเดือน {month_th} {year_be_header}", title_format)
+        
+        # 2. Table Header (Row 4)
+        headers = ['ลำดับ', 'ชื่อ - สกุล', 'จำนวนวันที่ไม่พบข้อมูล', '', '', '', 'วันที่ไม่พบข้อมูล', '', '', '', '']
+        for col_num, header in enumerate(headers):
+            worksheet.write(3, col_num, header, header_format)
+        # Merge header cells to match template look (approximate)
+        worksheet.merge_range(3, 2, 3, 5, 'จำนวนวันที่ไม่พบข้อมูล', header_format)
+        worksheet.merge_range(3, 6, 3, 10, 'วันที่ไม่พบข้อมูล', header_format)
+        
+        # 3. Write Data
+        curr_row = 4
+        global_idx = 1
+        
+        # Sort by department order if possible, or just unique depts
+        depts = grouped['แผนก'].unique()
+        for dept in depts:
+            # Write Dept Row
+            worksheet.merge_range(curr_row, 0, curr_row, 10, dept if dept else "ไม่ระบุฝ่าย", dept_format)
+            curr_row += 1
             
-        for col_num, value in enumerate(summary.columns.values): 
-            worksheet.write(2, col_num, value, header_format)
-            
-        worksheet.set_column(0, 0, 20, base_format) # แผนก
-        worksheet.set_column(1, 1, 35, name_format) # ชื่อ-สกุล
-        worksheet.set_column(2, 4, 20, base_format) # Counts
-        
-        valid_dates = df_all['วันที่'].dropna()
-        month_th = month_name_thai(int(valid_dates.dt.month.mode()[0])) if not valid_dates.empty else "ไม่ระบุ"
-        year_be = int(valid_dates.dt.year.mode()[0]) + 543 if not valid_dates.empty else ""
-        header_text = f"รายงานสรุปพนักงานลืมสแกนนิ้วและขาดงาน ประจำเดือน {month_th} {year_be}".strip()
-        
-        merge_format = workbook.add_format({'bold': True, 'font_name': base_font, 'font_size': 18, 'align': 'center', 'valign': 'bottom'})
-        worksheet.merge_range(0, 0, 0, len(summary.columns)-1, header_text, merge_format)
+            dept_data = grouped[grouped['แผนก'] == dept]
+            for _, row in dept_data.iterrows():
+                worksheet.write(curr_row, 0, global_idx, data_center_format)
+                worksheet.write(curr_row, 1, row['ชื่อ - สกุล'], data_left_format)
+                
+                # Number of days (merged across 4 cells)
+                worksheet.merge_range(curr_row, 2, curr_row, 5, row['จำนวนวันที่ไม่พบข้อมูล'], data_center_format)
+                
+                # Details (merged across 5 cells)
+                worksheet.merge_range(curr_row, 6, curr_row, 10, row['วันที่ไม่พบข้อมูล'], data_left_format)
+                
+                # Adjust row height based on number of lines in detail
+                num_lines = row['วันที่ไม่พบข้อมูล'].count('\n') + 1
+                worksheet.set_row(curr_row, 20 * num_lines)
+                
+                curr_row += 1
+                global_idx += 1
+                
+        # Column Widths
+        worksheet.set_column('A:A', 8)
+        worksheet.set_column('B:B', 30)
+        worksheet.set_column('C:F', 5) # Merged for count
+        worksheet.set_column('G:K', 12) # Merged for details
         
     return output.getvalue()
 
@@ -333,6 +394,19 @@ if 'master_df' in st.session_state:
         st.subheader("🏢 การมาสายแยกตามฝ่าย")
         dept_stat = pd.crosstab(master_df['แผนก'], master_df['สถานะ']).fillna(0)
         if 'สาย' in dept_stat.columns: st.plotly_chart(px.bar(dept_stat.reset_index(), x='แผนก', y='สาย', color='แผนก', text_auto=True), use_container_width=True)
+        
+        # เพิ่มส่วนสรุปภาพรวมรายเดือน
+        st.markdown("### 📊 สรุปภาพรวมรายเดือน (ลืมสแกน/ขาดงาน)")
+        m_forget_in_count = master_df[master_df['สถานะ'] == 'ลืมสแกนนิ้วเข้า']['ชื่อ-สกุล'].nunique()
+        m_forget_out_count = master_df[master_df['สถานะ'] == 'ลืมสแกนนิ้วออก']['ชื่อ-สกุล'].nunique()
+        m_absent_count = master_df[master_df['สถานะ'] == 'ขาดงาน']['ชื่อ-สกุล'].nunique()
+        
+        c_m1, c_m2, c_m3 = st.columns(3)
+        c_m1.metric("👤 ลืมสแกนเข้า", f"{m_forget_in_count} คน")
+        c_m2.metric("👤 ลืมสแกนออก", f"{m_forget_out_count} คน")
+        c_m3.metric("👤 ขาดงาน", f"{m_absent_count} คน")
+        st.markdown("---")
+        
         master_df['day'] = master_df['วันที่'].dt.day
         pivot = master_df.pivot_table(index="ชื่อ-สกุล", columns="day", values="สถานะ", aggfunc="first").fillna("")
         st.dataframe(style_status_table(pivot), use_container_width=True)
