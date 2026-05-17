@@ -168,6 +168,50 @@ def daily_to_excel_bytes(df_day: pd.DataFrame, report_date):
         worksheet.merge_range(0, 0, 0, len(export_df.columns)-1, header_text, merge_format)
     return output.getvalue()
 
+def missing_scan_to_excel_bytes(df_all: pd.DataFrame):
+    output = BytesIO()
+    # Group by name and department, then count specific statuses
+    summary = df_all.groupby(['แผนก', 'ชื่อ-สกุล'])['สถานะ'].value_counts().unstack(fill_value=0)
+    
+    # Ensure relevant columns exist
+    cols_of_interest = ['ลืมสแกนนิ้วเข้า', 'ลืมสแกนนิ้วออก', 'ขาดงาน']
+    for col in cols_of_interest:
+        if col not in summary.columns:
+            summary[col] = 0
+            
+    # Filter only those who have at least one issue
+    summary = summary[(summary['ลืมสแกนนิ้วเข้า'] > 0) | (summary['ลืมสแกนนิ้วออก'] > 0) | (summary['ขาดงาน'] > 0)]
+    summary = summary[cols_of_interest]
+    summary = summary.reset_index()
+
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        summary.to_excel(writer, sheet_name="Missing_Scans", startrow=2, index=False)
+        workbook, worksheet = writer.book, writer.sheets["Missing_Scans"]
+        base_font = 'Cordia New' 
+        base_format = workbook.add_format({'font_name': base_font, 'font_size': 14, 'align': 'center', 'valign': 'bottom', 'border': 1})
+        name_format = workbook.add_format({'font_name': base_font, 'font_size': 14, 'align': 'left', 'valign': 'bottom', 'border': 1})
+        header_format = workbook.add_format({'font_name': base_font, 'font_size': 14, 'bold': True, 'align': 'center', 'valign': 'bottom', 'border': 1, 'bg_color': '#FFC7CE'})
+        
+        for row in range(len(summary) + 3): 
+            worksheet.set_row(row, 30, base_format)
+            
+        for col_num, value in enumerate(summary.columns.values): 
+            worksheet.write(2, col_num, value, header_format)
+            
+        worksheet.set_column(0, 0, 20, base_format) # แผนก
+        worksheet.set_column(1, 1, 35, name_format) # ชื่อ-สกุล
+        worksheet.set_column(2, 4, 20, base_format) # Counts
+        
+        valid_dates = df_all['วันที่'].dropna()
+        month_th = month_name_thai(int(valid_dates.dt.month.mode()[0])) if not valid_dates.empty else "ไม่ระบุ"
+        year_be = int(valid_dates.dt.year.mode()[0]) + 543 if not valid_dates.empty else ""
+        header_text = f"รายงานสรุปพนักงานลืมสแกนนิ้วและขาดงาน ประจำเดือน {month_th} {year_be}".strip()
+        
+        merge_format = workbook.add_format({'bold': True, 'font_name': base_font, 'font_size': 18, 'align': 'center', 'valign': 'bottom'})
+        worksheet.merge_range(0, 0, 0, len(summary.columns)-1, header_text, merge_format)
+        
+    return output.getvalue()
+
 # -------------------------
 # PDF Parsing
 # -------------------------
@@ -292,7 +336,12 @@ if 'master_df' in st.session_state:
         master_df['day'] = master_df['วันที่'].dt.day
         pivot = master_df.pivot_table(index="ชื่อ-สกุล", columns="day", values="สถานะ", aggfunc="first").fillna("")
         st.dataframe(style_status_table(pivot), use_container_width=True)
-        st.download_button("📥 ดาวน์โหลดสรุปรวม (Excel)", df_to_excel_bytes(pivot, master_df), "monthly_summary.xlsx")
+        
+        col_dl1, col_dl2 = st.columns(2)
+        with col_dl1:
+            st.download_button("📥 ดาวน์โหลดสรุปรวม (Excel)", df_to_excel_bytes(pivot, master_df), "monthly_summary.xlsx", use_container_width=True)
+        with col_dl2:
+            st.download_button("📥 ดาวน์โหลดรายงานลืมสแกน/ขาดงาน (Excel)", missing_scan_to_excel_bytes(master_df), "missing_scans_report.xlsx", use_container_width=True)
 
     with tab4:
         search_name = st.selectbox("🔍 ค้นหาชื่อพนักงาน:", ["-- เลือกชื่อ --"] + sorted(master_df['ชื่อ-สกุล'].unique()))
