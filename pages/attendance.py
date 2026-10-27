@@ -101,25 +101,37 @@ _used_font = set_thai_font()
 def normalize_whitespace(s: str) -> str:
     if s is None: return ""
     
-    # 1. ล้างวงกลมประ (U+25CC) และอักขระล่องหน/ควบคุมทั้งหมด (Non-printable characters)
-    # รวมถึงรหัสแปลกๆ ที่ PDF มักแอบใส่มา
-    s = re.sub(r'[\u200b\ufeff\xa0\u25cc\u00ad]', '', s)
-    s = "".join(ch for ch in s if unicodedata.category(ch)[0] != "C") # ล้างกลุ่ม Control characters
+    # 1. จัดการ สระอำ ที่แตกเป็น space + วรรณยุกต์ + า (เช่น 'อ านวย' -> 'อำนวย', 'น ้าผึ้ง' -> 'น้ำผึ้ง')
+    s = re.sub(r'\s+([\u0E48-\u0E4B])\s*า', r'\1ำ', s)
+    s = re.sub(r'\s+า', 'ำ', s)
+    s = re.sub(r'ำ([\u0E48-\u0E4B])', r'\1ำ', s)
 
-    # 2. **Nuclear Clean**: ลบช่องว่างหรือสิ่งที่กั้นระหว่างพยัญชนะกับสระ/วรรณยุกต์
-    # ค้นหาช่องว่างที่ตามด้วยสระบน/ล่าง หรือวรรณยุกต์ แล้วลบทิ้งทันที
+    # 2. ซ่อมคำเฉพาะที่ฟอนต์ระบบสแกนเวลาชอบแตก
+    s = re.sub(r'ข้า\s*ราชการ', 'ข้าราชการ', s)
+    s = re.sub(r'พนักงาน\s*ราชการ', 'พนักงานราชการ', s)
+    s = re.sub(r'ลูกจ้าง\s*ชั่วคราว', 'ลูกจ้างชั่วคราว', s)
+    s = re.sub(r'ลูกจ้าง\s*ประจำ|ลูกจ้าง\s*ประจา|ประจา\b', 'ลูกจ้างประจำ', s)
+    s = re.sub(r'สวนสา\s*ราญ|สวนสาราญ', 'สวนสำราญ', s)
+    s = re.sub(r'วรรณคา\b', 'วรรณคำ', s)
+    s = re.sub(r'\bคา\s*สมหมาย|\bคาสมหมาย', 'คำสมหมาย', s)
+    
+    # 3. ล้างวงกลมประ (U+25CC) และอักขระล่องหน/ควบคุมทั้งหมด (Non-printable characters)
+    s = re.sub(r'[\u200b\ufeff\xa0\u25cc\u00ad]', '', s)
+    s = "".join(ch for ch in s if unicodedata.category(ch)[0] != "C")
+
+    # 4. ลบช่องว่างหรือสิ่งที่กั้นระหว่างพยัญชนะกับสระ/วรรณยุกต์
     s = re.sub(r'\s+([\u0E31\u0E34-\u0E3A\u0E47-\u0E4E])', r'\1', s)
     
-    # 3. จัดลำดับ Re-ordering (สลับวรรณยุกต์ที่มาทีหลังสระข้าง ให้กลับมาอยู่หน้า)
-    s = re.sub(r'([\u0E30\u0E32\u0E33])([\u0E48-\u0E4B])', r'\2\1', s)
+    # 5. จัดลำดับ Re-ordering (สลับวรรณยุกต์ที่มาทีหลังสระข้าง เช่น า้ -> ้า)
+    s = re.sub(r'([\u0E30\u0E32])([\u0E48-\u0E4B])', r'\2\1', s)
     
-    # 4. จัดลำดับกรณี วรรณยุกต์สลับกับสระบน/ล่าง (สระต้องมาก่อนวรรณยุกต์)
+    # 6. จัดลำดับกรณี วรรณยุกต์สลับกับสระบน/ล่าง (สระต้องมาก่อนวรรณยุกต์)
     s = re.sub(r'([\u0E48-\u0E4B])([\u0E31\u0E34-\u0E39])', r'\2\1', s)
 
-    # 5. จัดการ Unicode ให้เป็นรูปแบบมาตรฐานสูงสุด
+    # 7. จัดการ Unicode ให้เป็นรูปแบบมาตรฐานสูงสุด
     s = unicodedata.normalize('NFC', s)
     
-    # 6. ลบช่องว่างซ้ำซ้อน
+    # 8. ลบช่องว่างซ้ำซ้อน
     s = re.sub(r'\s+', ' ', s)
     
     return s.strip()
@@ -423,6 +435,81 @@ def parse_lines(lines, late_threshold, exc_week, exc_th, extra_list, source=""):
     return records, skipped
 
 
+def is_table_page(page):
+    """ตรวจสอบว่าหน้านี้เป็นตารางมาตรฐานที่มีหัวคอลัมน์ แผนก/ชื่อ-สกุล/วันที่/เวลา หรือไม่"""
+    header_chars = [c for c in page.chars if c['top'] < 60]
+    sample = "".join(c['text'] for c in header_chars)
+    return ('แผนก' in sample and ('ชื่อ' in sample or 'วัน' in sample or 'เข้างาน' in sample))
+
+def parse_table_page(page, late_threshold, exc_week, exc_th, extra_list, source=""):
+    """อ่านข้อมูลหน้าตารางโดยตรงจากพิกัดตัวอักษรเพื่อป้องกันปัญหาสระลอย/ข้อความเพี้ยนจาก pdfplumber extract_text"""
+    col_bounds = [
+        ('แผนก', 0, 120),
+        ('ชื่อ-สกุล', 120, 282),
+        ('วันที่', 282, 355),
+        ('เข้างาน', 355, 415),
+        ('ออกงาน', 415, 475),
+        ('สาย', 475, 595),
+    ]
+    chars_by_top = {}
+    for c in page.chars:
+        top = c['top']
+        found = None
+        for rt in chars_by_top:
+            if abs(rt - top) < 4:
+                found = rt; break
+        if found is None: chars_by_top[top] = [c]
+        else: chars_by_top[found].append(c)
+        
+    records, skipped = [], []
+    for rt in sorted(chars_by_top.keys()):
+        row_chars = chars_by_top[rt]
+        sample = "".join(c['text'] for c in row_chars)
+        if 'ชื่อ-สกุล' in sample or 'Page ' in sample or ('วันที่' in sample and 'เข้างาน' in sample):
+            continue
+            
+        raw_data = {}
+        for col_name, x0, x1 in col_bounds:
+            cell_chars = [c for c in row_chars if x0 <= c['x0'] < x1]
+            raw_data[col_name] = normalize_whitespace("".join(c['text'] for c in cell_chars))
+            
+        dept = raw_data.get('แผนก', '')
+        name = raw_data.get('ชื่อ-สกุล', '')
+        date_str = raw_data.get('วันที่', '')
+        cin = raw_data.get('เข้างาน', '')
+        cout = raw_data.get('ออกงาน', '')
+        
+        date_match = re.search(r'(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4}|\d{2})', date_str)
+        if not date_match or not name:
+            if any(c['text'].strip() for c in row_chars):
+                skipped.append(f"{source}: {sample}")
+            continue
+            
+        try:
+            d, m, y = int(date_match.group(1)), int(date_match.group(2)), int(date_match.group(3))
+            if y < 100: y = 2500 + y if y >= 40 else 2000 + y
+            if y > 2400: y -= 543
+            dt_obj = pd.Timestamp(year=y, month=m, day=d)
+        except Exception:
+            skipped.append(f"{source}: (วันที่ผิดรูปแบบ) {sample}")
+            continue
+        
+        time_cin = re.search(r'([01]?\d|2[0-3]):[0-5]\d', cin)
+        time_cout = re.search(r'([01]?\d|2[0-3]):[0-5]\d', cout)
+        check_in = time_cin.group(0) if time_cin else None
+        check_out = time_cout.group(0) if time_cout else None
+        
+        status = _get_status(dt_obj, check_in, check_out, late_threshold, exc_week, exc_th, extra_list)
+        records.append({
+            'แผนก': dept,
+            'ชื่อ-สกุล': name,
+            'วันที่': dt_obj,
+            'เข้างาน': check_in,
+            'ออกงาน': check_out,
+            'สถานะ': status
+        })
+    return records, skipped
+
 def process_pdf(file, late_threshold, exc_week, exc_th, extra_list):
     """คืนค่า (DataFrame หรือ None, รายการบรรทัดที่ข้าม)"""
     fname = getattr(file, 'name', str(file))
@@ -430,20 +517,29 @@ def process_pdf(file, late_threshold, exc_week, exc_th, extra_list):
     try:
         with pdfplumber.open(file) as pdf:
             for pageno, page in enumerate(pdf.pages, start=1):
-                # y_tolerance ต่ำลงเพื่อไม่ให้แถวที่อยู่ชิดกันถูกรวมเป็นบรรทัดเดียว
-                text = page.extract_text(x_tolerance=2, y_tolerance=2)
-                if not text:
-                    all_skipped.append(f"{fname} หน้า {pageno}: ไม่พบข้อความ (อาจเป็น PDF แบบสแกนภาพ)")
-                    continue
-                lines = [ln.strip() for ln in text.split('\n') if ln.strip()]
-                recs, skipped = parse_lines(lines, late_threshold, exc_week, exc_th, extra_list,
-                                            source=f"{fname} หน้า {pageno}")
+                page_src = f"{fname} หน้า {pageno}"
+                if is_table_page(page):
+                    recs, skipped = parse_table_page(page, late_threshold, exc_week, exc_th, extra_list, source=page_src)
+                else:
+                    text = page.extract_text(x_tolerance=2, y_tolerance=2)
+                    if not text:
+                        all_skipped.append(f"{page_src}: ไม่พบข้อความ (อาจเป็น PDF แบบสแกนภาพ)")
+                        continue
+                    lines = [ln.strip() for ln in text.split('\n') if ln.strip()]
+                    recs, skipped = parse_lines(lines, late_threshold, exc_week, exc_th, extra_list, source=page_src)
                 all_records.extend(recs)
                 all_skipped.extend(skipped)
     except Exception as e:
         st.error(f"อ่านไฟล์ {fname} ไม่สำเร็จ: {e}")
     return (pd.DataFrame(all_records) if all_records else None), all_skipped
 
+def format_df_for_display(df: pd.DataFrame) -> pd.DataFrame:
+    """จัดรูปแบบคอลัมน์วันที่ให้อ่านง่ายเป็น วัน/เดือน/ปี แทน Timestamp 00:00:00"""
+    df_disp = df.copy()
+    if 'วันที่' in df_disp.columns:
+        if pd.api.types.is_datetime64_any_dtype(df_disp['วันที่']):
+            df_disp['วันที่'] = df_disp['วันที่'].dt.strftime('%d/%m/%Y')
+    return df_disp
 
 def unify_names(df: pd.DataFrame) -> pd.DataFrame:
     """รวมชื่อที่ต่างกันแค่ช่องว่าง (เช่น 'นาย สมชาย' กับ 'นายสมชาย') ให้เป็นชื่อเดียวกัน"""
@@ -542,7 +638,7 @@ if 'master_df' in st.session_state:
             else:
                 st.info("ไม่มีข้อมูลเวลาเข้างานในกลุ่มที่เลือก")
 
-        st.dataframe(style_status_table(df_day), use_container_width=True)
+        st.dataframe(style_status_table(format_df_for_display(df_day)), use_container_width=True)
         
         dept_file_tag = f"_{sel_dept_day}" if sel_dept_day != "ทั้งหมด" else ""
         btn_daily_label = "📥 ดาวน์โหลดรายงานวันนี้ (Excel)" + (f" - {sel_dept_day}" if sel_dept_day != "ทั้งหมด" else "")
@@ -618,6 +714,6 @@ if 'master_df' in st.session_state:
             c2.metric("⚠️ สาย", ps.get('สาย', 0))
             c3.metric("❌ ขาด", ps.get('ขาดงาน', 0))
             c4.metric("🔔 ลืมสแกน", ps.get('ลืมสแกนนิ้วเข้า', 0) + ps.get('ลืมสแกนนิ้วออก', 0))
-            st.dataframe(style_status_table(df_p[['วันที่', 'เข้างาน', 'ออกงาน', 'สถานะ']]), use_container_width=True)
+            st.dataframe(style_status_table(format_df_for_display(df_p[['วันที่', 'เข้างาน', 'ออกงาน', 'สถานะ']])), use_container_width=True)
 else:
     st.info("👈 โปรดอัปโหลดไฟล์ PDF ในแท็บ 'นำเข้าข้อมูล' ก่อนครับ")
