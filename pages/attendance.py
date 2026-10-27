@@ -11,6 +11,8 @@ from io import BytesIO
 import plotly.express as px
 import holidays
 import unicodedata
+from difflib import SequenceMatcher
+from data_parser import load_data
 
 # -------------------------
 # ตั้งค่าหน้าเว็บและ CSS
@@ -185,7 +187,10 @@ def df_to_excel_bytes(pivot: pd.DataFrame, df_all: pd.DataFrame, dept_label: str
 def daily_to_excel_bytes(df_day: pd.DataFrame, report_date, dept_label: str = ""):
     output = BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        export_df = df_day[['แผนก', 'ชื่อ-สกุล', 'เข้างาน', 'ออกงาน', 'สถานะ']]
+        cols_to_exp = ['แผนก', 'ชื่อ-สกุล', 'เข้างาน', 'ออกงาน', 'สถานะ']
+        if 'ประเภทการลา' in df_day.columns and df_day['มีใบลา'].any():
+            cols_to_exp.extend(['ประเภทการลา', 'หมายเหตุการลา'])
+        export_df = df_day[cols_to_exp]
         export_df.to_excel(writer, sheet_name="Daily", startrow=2, index=False)
         workbook, worksheet = writer.book, writer.sheets["Daily"]
         base_font = 'TH SarabunPSK' 
@@ -195,8 +200,11 @@ def daily_to_excel_bytes(df_day: pd.DataFrame, report_date, dept_label: str = ""
         for row in range(len(export_df) + 3): worksheet.set_row(row, 30, base_format)
         for col_num, value in enumerate(export_df.columns.values): worksheet.write(2, col_num, value, header_format)
         worksheet.set_column(0, 0, 20, base_format); worksheet.set_column(1, 1, 35, name_format); worksheet.set_column(2, 4, 15, base_format)
+        if len(cols_to_exp) > 5:
+            worksheet.set_column(5, len(cols_to_exp)-1, 20, base_format)
         sub_dept = f" ({dept_label})" if dept_label and dept_label != "ทั้งหมด" else ""
-        header_text = f"รายงานการเข้า-ออกงาน{sub_dept} ประจำวันที่ {report_date.strftime('%d/%m/%Y')}"
+        date_str = report_date.strftime('%d/%m/%Y') if hasattr(report_date, 'strftime') else str(report_date)
+        header_text = f"รายงานการเข้า-ออกงาน{sub_dept} ประจำวันที่ {date_str}"
         merge_format = workbook.add_format({'bold': True, 'font_name': base_font, 'font_size': 18, 'align': 'center', 'valign': 'bottom'})
         worksheet.merge_range(0, 0, 0, len(export_df.columns)-1, header_text, merge_format)
     return output.getvalue()
@@ -207,6 +215,8 @@ def missing_scan_to_excel_bytes(df_all: pd.DataFrame, dept_label: str = ""):
     # 1. Prepare data
     missing_statuses = ['ลืมสแกนนิ้วเข้า', 'ลืมสแกนนิ้วออก', 'ขาดงาน']
     df_missing = df_all[df_all['สถานะ'].isin(missing_statuses)].copy()
+    if 'มีใบลา' in df_missing.columns:
+        df_missing = df_missing[df_missing['มีใบลา'] != True]
     
     if df_missing.empty:
         with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
@@ -553,25 +563,250 @@ def unify_names(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 # -------------------------
+# Helper Functions: เทียบข้อมูลวันลา
+# -------------------------
+def clean_name(name):
+    if not name or pd.isna(name): return ""
+    n = re.sub(r'\s+', '', str(name))
+    n = re.sub(r'^(นาย|นางสาว|นาง|น\.ส\.|ว่าที่ร้อยตรี|ว่าที่ร\.ต\.|ว่าที่|ดร\.|จ\.ส\.|พ\.จ\.|ร\.ต\.|ร\.ท\.|ร\.อ\.|น\.ต\.|น\.ท\.|น\.อ\.|พ\.ต\.|พ\.ท\.|พ\.อ\.|ด\.ต\.|ส\.ต\.|ส\.อ\.|จ\.ต\.|จ\.ท\.|จ\.อ\.)', '', n)
+    return n
+
+def split_first_last(name):
+    cleaned = re.sub(r'^(นาย|นางสาว|นาง|น\.ส\.|ว่าที่ร้อยตรี|ว่าที่ร\.ต\.|ว่าที่|ดร\.|จ\.ส\.|พ\.จ\.|ร\.ต\.|ร\.ท\.|ร\.อ\.|น\.ต\.|น\.ท\.|น\.อ\.|พ\.ต\.|พ\.ท\.|พ\.อ\.|ด\.ต\.|ส\.ต\.|ส\.อ\.|จ\.ต\.|จ\.ท\.|จ\.อ\.)\s*', '', str(name)).strip()
+    parts = cleaned.split()
+    first = parts[0] if parts else ''
+    last = ''.join(parts[1:]) if len(parts) > 1 else ''
+    return first, last
+
+def is_name_match(n1, n2):
+    c1, c2 = clean_name(n1), clean_name(n2)
+    if c1 == c2: return True
+    if not c1 or not c2: return False
+    
+    f1, l1 = split_first_last(n1)
+    f2, l2 = split_first_last(n2)
+    
+    if f1 and f2:
+        if f1 == f2 or SequenceMatcher(None, f1, f2).ratio() > 0.85:
+            if l1 and l2:
+                if l1.startswith(l2) or l2.startswith(l1):
+                    return True
+                if SequenceMatcher(None, l1, l2).ratio() > 0.8:
+                    return True
+            elif not l1 or not l2:
+                if c1.startswith(c2) or c2.startswith(c1):
+                    return True
+    return False
+
+def shorten_status_for_pivot(val):
+    if not val or pd.isna(val): return ""
+    v = str(val).strip()
+    mapping = {
+        "ปกติ": "ปกติ",
+        "สาย (มีใบขออนุญาต)": "สาย(อนุญาต)",
+        "สาย": "สาย",
+        "ขาดงาน": "ขาด",
+        "วันหยุด": "หยุด",
+        "ลืมสแกนนิ้วเข้า": "ลืมเข้า",
+        "ลืมสแกนนิ้วออก": "ลืมออก",
+        "ลาป่วย (มีใบลา)": "ลาป่วย",
+        "ลากิจ (มีใบลา)": "ลากิจ",
+        "ลาพักผ่อน (มีใบลา)": "พักผ่อน",
+        "ลาป่วย (ครึ่งวัน)": "ป่วย(ครึ่ง)",
+        "ลากิจ (ครึ่งวัน)": "กิจ(ครึ่ง)",
+        "ลาพักผ่อน (ครึ่งวัน)": "พัก(ครึ่ง)"
+    }
+    return mapping.get(v, v)
+
+def cross_check_attendance_with_leave(attendance_df: pd.DataFrame, leave_df: pd.DataFrame) -> pd.DataFrame:
+    df = attendance_df.copy()
+    if df.empty or leave_df is None or leave_df.empty:
+        if 'มีใบลา' not in df.columns:
+            df['มีใบลา'] = False
+            df['ประเภทการลา'] = '-'
+            df['หมายเหตุการลา'] = ''
+        return df
+    
+    leave_indexed = {}
+    for idx, lrow in leave_df.iterrows():
+        key = (str(lrow['Month']).strip(), int(lrow['Day']))
+        if key not in leave_indexed:
+            leave_indexed[key] = []
+        leave_indexed[key].append(lrow)
+        
+    has_leave_col = []
+    leave_type_col = []
+    leave_remark_col = []
+    updated_status_col = []
+    
+    for _, arow in df.iterrows():
+        dt = arow['วันที่']
+        m_name = month_name_thai(dt.month)
+        day_num = dt.day
+        att_name = arow['ชื่อ-สกุล']
+        cur_status = arow['สถานะ']
+        
+        candidates = leave_indexed.get((m_name, day_num), [])
+        matched_leave = None
+        for cand in candidates:
+            if is_name_match(cand['Name'], att_name):
+                matched_leave = cand
+                break
+                
+        if matched_leave is not None:
+            l_type = matched_leave['Type']
+            is_half = bool(matched_leave.get('IsHalf', False))
+            remark = str(matched_leave.get('Remarks', '') or '')
+            
+            has_leave_col.append(True)
+            leave_type_col.append(l_type)
+            leave_remark_col.append(remark)
+            
+            if cur_status == 'ขาดงาน':
+                if is_half:
+                    updated_status_col.append(f"{l_type} (ครึ่งวัน)")
+                else:
+                    updated_status_col.append(f"{l_type} (มีใบลา)")
+            elif cur_status in ['ลืมสแกนนิ้วเข้า', 'ลืมสแกนนิ้วออก']:
+                if l_type == 'สาย':
+                    updated_status_col.append('สาย (มีใบขออนุญาต)')
+                elif is_half:
+                    updated_status_col.append(f"{l_type} (ครึ่งวัน)")
+                else:
+                    updated_status_col.append(f"{l_type} (มีใบลา)")
+            elif cur_status == 'สาย':
+                if l_type == 'สาย':
+                    updated_status_col.append('สาย (มีใบขออนุญาต)')
+                elif is_half:
+                    updated_status_col.append(f"{l_type} (ครึ่งวัน)")
+                else:
+                    updated_status_col.append(f"{l_type} (มีใบลา)")
+            else:
+                updated_status_col.append(cur_status)
+        else:
+            has_leave_col.append(False)
+            leave_type_col.append('-')
+            leave_remark_col.append('')
+            updated_status_col.append(cur_status)
+            
+    df['มีใบลา'] = has_leave_col
+    df['ประเภทการลา'] = leave_type_col
+    df['หมายเหตุการลา'] = leave_remark_col
+    df['สถานะ'] = updated_status_col
+    return df
+
+def cross_check_to_excel_bytes(df_all: pd.DataFrame, dept_label: str = ""):
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        workbook = writer.book
+        base_font = 'TH SarabunPSK'
+        title_format = workbook.add_format({'bold': True, 'font_name': base_font, 'font_size': 18, 'align': 'center'})
+        header_format = workbook.add_format({'bold': True, 'font_name': base_font, 'font_size': 14, 'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#D9D9D9'})
+        data_center_format = workbook.add_format({'font_name': base_font, 'font_size': 14, 'align': 'center', 'valign': 'vcenter', 'border': 1})
+        data_left_format = workbook.add_format({'font_name': base_font, 'font_size': 14, 'align': 'left', 'valign': 'vcenter', 'border': 1})
+        
+        sub_dept = f" ({dept_label})" if dept_label and dept_label != "ทั้งหมด" else ""
+        
+        # 1. Approved Leave Sheet
+        leave_df = df_all[df_all['มีใบลา'] == True].copy() if 'มีใบลา' in df_all.columns else pd.DataFrame()
+        ws_leave = workbook.add_worksheet('ผู้มีใบลาอนุมัติ')
+        ws_leave.merge_range('A1:G1', f'รายงานรายชื่อผู้มีใบลาอนุมัติถูกต้อง{sub_dept}', title_format)
+        headers_l = ['ลำดับ', 'วันที่', 'แผนก', 'ชื่อ - สกุล', 'ประเภทการลา', 'สถานะ', 'หมายเหตุ']
+        for i, h in enumerate(headers_l):
+            ws_leave.write(2, i, h, header_format)
+        row_idx = 3
+        for idx, r in enumerate(leave_df.itertuples(), 1):
+            d_str = r.วันที่.strftime('%d/%m/%Y') if hasattr(r.วันที่, 'strftime') else str(r.วันที่)
+            ws_leave.write(row_idx, 0, idx, data_center_format)
+            ws_leave.write(row_idx, 1, d_str, data_center_format)
+            ws_leave.write(row_idx, 2, getattr(r, 'แผนก', ''), data_center_format)
+            ws_leave.write(row_idx, 3, getattr(r, '_2', getattr(r, 'ชื่อ_สกุล', '')), data_left_format)
+            ws_leave.write(row_idx, 4, getattr(r, 'ประเภทการลา', '-'), data_center_format)
+            ws_leave.write(row_idx, 5, getattr(r, 'สถานะ', ''), data_center_format)
+            ws_leave.write(row_idx, 6, getattr(r, 'หมายเหตุการลา', ''), data_left_format)
+            row_idx += 1
+        ws_leave.set_column('A:A', 8)
+        ws_leave.set_column('B:C', 16)
+        ws_leave.set_column('D:D', 30)
+        ws_leave.set_column('E:F', 18)
+        ws_leave.set_column('G:G', 25)
+        
+        # 2. Unauthorized Absent Sheet
+        absent_df = df_all[df_all['สถานะ'] == 'ขาดงาน'].copy()
+        ws_abs = workbook.add_worksheet('ขาดงานจริง_ไม่มีใบลา')
+        ws_abs.merge_range('A1:E1', f'รายงานรายชื่อผู้ขาดงานจริง (ไม่มีใบลา){sub_dept}', title_format)
+        headers_a = ['ลำดับ', 'วันที่', 'แผนก', 'ชื่อ - สกุล', 'สถานะ']
+        for i, h in enumerate(headers_a):
+            ws_abs.write(2, i, h, header_format)
+        row_idx = 3
+        for idx, r in enumerate(absent_df.itertuples(), 1):
+            d_str = r.วันที่.strftime('%d/%m/%Y') if hasattr(r.วันที่, 'strftime') else str(r.วันที่)
+            ws_abs.write(row_idx, 0, idx, data_center_format)
+            ws_abs.write(row_idx, 1, d_str, data_center_format)
+            ws_abs.write(row_idx, 2, getattr(r, 'แผนก', ''), data_center_format)
+            ws_abs.write(row_idx, 3, getattr(r, '_2', getattr(r, 'ชื่อ_สกุล', '')), data_left_format)
+            ws_abs.write(row_idx, 4, getattr(r, 'สถานะ', ''), data_center_format)
+            row_idx += 1
+        ws_abs.set_column('A:A', 8)
+        ws_abs.set_column('B:C', 16)
+        ws_abs.set_column('D:D', 30)
+        ws_abs.set_column('E:E', 18)
+
+    return output.getvalue()
+
+# -------------------------
 # Styling DataFrame
 # -------------------------
 def style_status_table(df: pd.DataFrame):
     def highlight(val):
-        colors = {"ปกติ": "#C6EFCE; color: #006100", "สาย": "#FFEB9C; color: #9C6500", "ขาดงาน": "#FFC7CE; color: #9C0006", "วันหยุด": "#E7E6E6; color: #595959"}
-        color = colors.get(val, "")
-        if "ลืมสแกนนิ้ว" in str(val): color = "#FCE4D6; color: #9C0006"
-        return f"background-color: {color}" if color else ""
+        val_str = str(val)
+        if "ปกติ" in val_str:
+            return "background-color: #C6EFCE; color: #006100"
+        elif "สาย (มีใบขออนุญาต)" in val_str or "สาย(อนุญาต)" in val_str:
+            return "background-color: #FFF3CD; color: #856404"
+        elif "สาย" in val_str:
+            return "background-color: #FFEB9C; color: #9C6500"
+        elif "ขาดงาน" in val_str or val_str == "ขาด":
+            return "background-color: #FFC7CE; color: #9C0006"
+        elif "วันหยุด" in val_str or val_str == "หยุด":
+            return "background-color: #E7E6E6; color: #595959"
+        elif "ลืมสแกน" in val_str or "ลืมเข้า" in val_str or "ลืมออก" in val_str:
+            return "background-color: #FCE4D6; color: #9C0006"
+        elif "ครึ่งวัน" in val_str or "ครึ่ง" in val_str:
+            return "background-color: #E2D9F3; color: #491217"
+        elif "ลา" in val_str or "พักผ่อน" in val_str:
+            return "background-color: #D1ECF1; color: #0C5460"
+        return ""
     subset = ['สถานะ'] if "สถานะ" in df.columns else None
     return df.style.map(highlight, subset=subset) if hasattr(df.style, "map") else df.style.applymap(highlight, subset=subset)
 
 # -------------------------
 # UI Tabs
 # -------------------------
-tab1, tab2, tab3, tab4 = st.tabs(["📤 นำเข้าข้อมูล", "📅 ภาพรวมรายวัน", "📈 สถิติรายเดือน", "👤 ข้อมูลรายบุคคล"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📤 นำเข้าข้อมูล", "📅 ภาพรวมรายวัน", "📈 สถิติรายเดือน", "👤 ข้อมูลรายบุคคล", "🏖️ ตรวจสอบเทียบวันลา"])
 
 with tab1:
     st.header("📤 นำเข้าข้อมูล")
-    uploaded_files = st.file_uploader("ลากไฟล์ PDF มาวางตรงนี้", type="pdf", accept_multiple_files=True)
+    col_u1, col_u2 = st.columns([1, 1])
+    with col_u1:
+        st.subheader("1. 📄 ข้อมูลสแกนนิ้ว (PDF)")
+        uploaded_files = st.file_uploader("ลากไฟล์ PDF สแกนนิ้วมาวางตรงนี้", type="pdf", accept_multiple_files=True)
+    with col_u2:
+        st.subheader("2. 📊 ตารางวันลา (Excel)")
+        uploaded_leave = st.file_uploader("อัปโหลดไฟล์ตารางวันลา Excel เพื่อตรวจเทียบอัตโนมัติ (.xlsx)", type=["xlsx"], key="attendance_leave_uploader")
+        if uploaded_leave is not None:
+            try:
+                leave_df_parsed = load_data(uploaded_leave)
+                st.session_state.leave_df = leave_df_parsed
+                st.success(f"✅ โหลดข้อมูลตารางวันลาสำเร็จ: {len(leave_df_parsed)} รายการ")
+                if 'master_df' in st.session_state:
+                    st.session_state.master_df = cross_check_attendance_with_leave(st.session_state.master_df, leave_df_parsed)
+                    st.info("🔄 อัปเดตการตรวจเทียบวันลากับข้อมูลสแกนนิ้วเรียบร้อยแล้ว!")
+            except Exception as e:
+                st.error(f"❌ อ่านไฟล์ตารางวันลาไม่สำเร็จ: {e}")
+        elif 'leave_df' in st.session_state and st.session_state.leave_df is not None:
+            st.info(f"💡 พบข้อมูลตารางวันลาในระบบแล้ว: {len(st.session_state.leave_df)} รายการ (พร้อมตรวจเทียบ)")
+
     if uploaded_files and st.button("🚀 ประมวลผลข้อมูล", type="primary"):
         all_data, all_skipped = [], []
         for f in uploaded_files:
@@ -582,8 +817,14 @@ with tab1:
                 st.write(f"📄 {f.name}: พบ {len(df)} รายการ / {df['ชื่อ-สกุล'].nunique()} คน")
         if all_data:
             master_df = unify_names(pd.concat(all_data, ignore_index=True)).drop_duplicates(subset=['ชื่อ-สกุล', 'วันที่'], keep='last')
+            
+            # Cross check with leave data if available
+            curr_leave_df = st.session_state.get('leave_df')
+            master_df = cross_check_attendance_with_leave(master_df, curr_leave_df)
             st.session_state.master_df = master_df
-            st.success(f"✅ ประมวลผลสำเร็จ! รวม {master_df['ชื่อ-สกุล'].nunique()} คน ({len(master_df)} บันทึก)")
+            
+            leave_note = " และตรวจเทียบกับตารางวันลาแล้ว" if curr_leave_df is not None and not curr_leave_df.empty else ""
+            st.success(f"✅ ประมวลผลสำเร็จ{leave_note}! รวม {master_df['ชื่อ-สกุล'].nunique()} คน ({len(master_df)} บันทึก)")
             
             # แสดงสรุปสถิติจำนวนคนแยกตามฝ่าย
             dept_counts = master_df.drop_duplicates(subset=['ชื่อ-สกุล']).groupby(
@@ -616,17 +857,39 @@ if 'master_df' in st.session_state:
         df_day = filter_by_dept(df_day_all, sel_dept_day)
 
         c_status = df_day['สถานะ'].value_counts().to_dict()
-        col1, col2, col3, col4, col5 = st.columns(5)
+        leave_cnt = sum(c for s, c in c_status.items() if 'ลา' in s or 'มีใบลา' in s or 'ครึ่งวัน' in s)
+        late_cnt = c_status.get("สาย", 0) + c_status.get("สาย (มีใบขออนุญาต)", 0)
+        forget_cnt = c_status.get("ลืมสแกนนิ้วเข้า", 0) + c_status.get("ลืมสแกนนิ้วออก", 0)
+        absent_cnt = c_status.get("ขาดงาน", 0)
+
+        col1, col2, col3, col4, col5, col6 = st.columns(6)
         col1.metric("👥 ทั้งหมด", len(df_day))
         col2.metric("✅ ปกติ", c_status.get("ปกติ", 0))
-        col3.metric("⚠️ สาย", c_status.get("สาย", 0))
-        col4.metric("❌ ขาด", c_status.get("ขาดงาน", 0))
-        col5.metric("🔔 ลืมสแกน", c_status.get("ลืมสแกนนิ้วเข้า", 0) + c_status.get("ลืมสแกนนิ้วออก", 0))
+        col3.metric("⚠️ สาย", late_cnt)
+        col4.metric("🏖️ ลา (มีใบลา)", leave_cnt)
+        col5.metric("❌ ขาด (ไม่มีใบลา)", absent_cnt)
+        col6.metric("🔔 ลืมสแกน", forget_cnt)
         st.markdown("---")
 
         c_chart, c_leader = st.columns(2)
         with c_chart:
-            fig = px.pie(pd.DataFrame(list(c_status.items()), columns=['Status', 'Count']), values='Count', names='Status', hole=0.4, color='Status', color_discrete_map={"ปกติ": "#28a745", "สาย": "#ffc107", "ขาดงาน": "#dc3545", "ลืมสแกนนิ้วเข้า": "#fd7e14", "ลืมสแกนนิ้วออก": "#fd7e14", "วันหยุด": "#6c757d"})
+            pie_df = pd.DataFrame(list(c_status.items()), columns=['Status', 'Count'])
+            color_map = {
+                "ปกติ": "#28a745",
+                "สาย": "#ffc107",
+                "สาย (มีใบขออนุญาต)": "#ffe082",
+                "ขาดงาน": "#dc3545",
+                "ลืมสแกนนิ้วเข้า": "#fd7e14",
+                "ลืมสแกนนิ้วออก": "#e65100",
+                "ลาป่วย (มีใบลา)": "#17a2b8",
+                "ลากิจ (มีใบลา)": "#6f42c1",
+                "ลาพักผ่อน (มีใบลา)": "#20c997",
+                "ลาป่วย (ครึ่งวัน)": "#6610f2",
+                "ลากิจ (ครึ่งวัน)": "#845ef7",
+                "ลาพักผ่อน (ครึ่งวัน)": "#38d9a9",
+                "วันหยุด": "#6c757d"
+            }
+            fig = px.pie(pie_df, values='Count', names='Status', hole=0.4, color='Status', color_discrete_map=color_map)
             st.plotly_chart(fig, use_container_width=True)
         with c_leader:
             leader_title = "🏆 มาเช้า 5 อันดับแรก" + (f" ({sel_dept_day})" if sel_dept_day != "ทั้งหมด" else "")
@@ -638,7 +901,10 @@ if 'master_df' in st.session_state:
             else:
                 st.info("ไม่มีข้อมูลเวลาเข้างานในกลุ่มที่เลือก")
 
-        st.dataframe(style_status_table(format_df_for_display(df_day)), use_container_width=True)
+        show_cols_day = ['แผนก', 'ชื่อ-สกุล', 'เข้างาน', 'ออกงาน', 'สถานะ']
+        if 'ประเภทการลา' in df_day.columns and df_day['มีใบลา'].any():
+            show_cols_day.extend(['ประเภทการลา', 'หมายเหตุการลา'])
+        st.dataframe(style_status_table(format_df_for_display(df_day[show_cols_day])), use_container_width=True)
         
         dept_file_tag = f"_{sel_dept_day}" if sel_dept_day != "ทั้งหมด" else ""
         btn_daily_label = "📥 ดาวน์โหลดรายงานวันนี้ (Excel)" + (f" - {sel_dept_day}" if sel_dept_day != "ทั้งหมด" else "")
@@ -651,33 +917,38 @@ if 'master_df' in st.session_state:
         if sel_dept_month == "ทั้งหมด":
             st.subheader("🏢 การมาสายแยกตามฝ่าย")
             dept_stat = pd.crosstab(master_df['แผนก'].replace({'': 'ไม่ระบุฝ่าย'}), master_df['สถานะ']).fillna(0)
-            if 'สาย' in dept_stat.columns:
-                st.plotly_chart(px.bar(dept_stat.reset_index(), x='แผนก', y='สาย', color='แผนก', text_auto=True), use_container_width=True)
+            late_cols = [c for c in ['สาย', 'สาย (มีใบขออนุญาต)'] if c in dept_stat.columns]
+            if late_cols:
+                dept_stat['รวมสาย'] = dept_stat[late_cols].sum(axis=1)
+                st.plotly_chart(px.bar(dept_stat.reset_index(), x='แผนก', y='รวมสาย', color='แผนก', text_auto=True), use_container_width=True)
         else:
             st.subheader(f"🏢 สถิติการมาสายในกลุ่ม: {sel_dept_month}")
-            late_in_dept = df_month[df_month['สถานะ'] == 'สาย']['ชื่อ-สกุล'].value_counts().reset_index()
+            late_in_dept = df_month[df_month['สถานะ'].isin(['สาย', 'สาย (มีใบขออนุญาต)'])].groupby('ชื่อ-สกุล')['สถานะ'].count().reset_index()
             late_in_dept.columns = ['ชื่อ-สกุล', 'จำนวนครั้งที่สาย']
             if not late_in_dept.empty:
-                st.plotly_chart(px.bar(late_in_dept.head(10), x='ชื่อ-สกุล', y='จำนวนครั้งที่สาย', color='จำนวนครั้งที่สาย', text_auto=True, color_continuous_scale="Reds"), use_container_width=True)
+                st.plotly_chart(px.bar(late_in_dept.sort_values('จำนวนครั้งที่สาย', ascending=False).head(10), x='ชื่อ-สกุล', y='จำนวนครั้งที่สาย', color='จำนวนครั้งที่สาย', text_auto=True, color_continuous_scale="Reds"), use_container_width=True)
             else:
                 st.info(f"✨ ยอดเยี่ยม! ไม่พบประวัติการมาสายในกลุ่ม {sel_dept_month}")
 
         # เพิ่มส่วนสรุปภาพรวมรายเดือน
-        monthly_summary_title = "### 📊 สรุปภาพรวมรายเดือน (ลืมสแกน/ขาดงาน)" + (f" - {sel_dept_month}" if sel_dept_month != "ทั้งหมด" else "")
+        monthly_summary_title = "### 📊 สรุปภาพรวมรายเดือน (ลืมสแกน/ขาดงาน/วันลา)" + (f" - {sel_dept_month}" if sel_dept_month != "ทั้งหมด" else "")
         st.markdown(monthly_summary_title)
         m_forget_in_count = df_month[df_month['สถานะ'] == 'ลืมสแกนนิ้วเข้า']['ชื่อ-สกุล'].nunique()
         m_forget_out_count = df_month[df_month['สถานะ'] == 'ลืมสแกนนิ้วออก']['ชื่อ-สกุล'].nunique()
         m_absent_count = df_month[df_month['สถานะ'] == 'ขาดงาน']['ชื่อ-สกุล'].nunique()
+        m_leave_count = df_month[df_month['มีใบลา'] == True]['ชื่อ-สกุล'].nunique() if 'มีใบลา' in df_month.columns else 0
 
-        c_m1, c_m2, c_m3 = st.columns(3)
+        c_m1, c_m2, c_m3, c_m4 = st.columns(4)
         c_m1.metric("👤 ลืมสแกนเข้า", f"{m_forget_in_count} คน")
         c_m2.metric("👤 ลืมสแกนออก", f"{m_forget_out_count} คน")
-        c_m3.metric("👤 ขาดงาน", f"{m_absent_count} คน")
+        c_m3.metric("❌ ขาดงานจริง (ไม่มีใบลา)", f"{m_absent_count} คน")
+        c_m4.metric("🏖️ มีใบลาถูกต้อง", f"{m_leave_count} คน")
         st.markdown("---")
 
         df_month_p = df_month.copy()
         df_month_p['day'] = df_month_p['วันที่'].dt.day
-        pivot = df_month_p.pivot_table(index="ชื่อ-สกุล", columns="day", values="สถานะ", aggfunc="first").fillna("")
+        df_month_p['short_status'] = df_month_p['สถานะ'].apply(shorten_status_for_pivot)
+        pivot = df_month_p.pivot_table(index="ชื่อ-สกุล", columns="day", values="short_status", aggfunc="first").fillna("")
         st.dataframe(style_status_table(pivot), use_container_width=True)
 
         dept_month_tag = f"_{sel_dept_month}" if sel_dept_month != "ทั้งหมด" else ""
@@ -686,7 +957,7 @@ if 'master_df' in st.session_state:
             dl_sum_label = "📥 ดาวน์โหลดสรุปรวม (Excel)" + (f" - {sel_dept_month}" if sel_dept_month != "ทั้งหมด" else "")
             st.download_button(dl_sum_label, df_to_excel_bytes(pivot, df_month, sel_dept_month), f"monthly_summary{dept_month_tag}.xlsx", use_container_width=True)
         with col_dl2:
-            dl_missing_label = "📥 ดาวน์โหลดรายงานลืมสแกน/ขาดงาน (Excel)" + (f" - {sel_dept_month}" if sel_dept_month != "ทั้งหมด" else "")
+            dl_missing_label = "📥 ดาวน์โหลดรายงานลืมสแกน/ขาดงานจริง (Excel)" + (f" - {sel_dept_month}" if sel_dept_month != "ทั้งหมด" else "")
             st.download_button(dl_missing_label, missing_scan_to_excel_bytes(df_month, sel_dept_month), f"missing_scans_report{dept_month_tag}.xlsx", use_container_width=True)
 
     with tab4:
@@ -708,12 +979,82 @@ if 'master_df' in st.session_state:
             st.markdown(f"**👤 ชื่อ-สกุล:** `{search_name}` &nbsp;&nbsp;|&nbsp;&nbsp; **🏢 ฝ่าย/กลุ่มงาน:** `{emp_dept_str}`")
 
             ps = df_p['สถานะ'].value_counts().to_dict()
-            score = max(100 - (ps.get('สาย', 0) * 2) - ((ps.get('ลืมสแกนนิ้วเข้า', 0) + ps.get('ลืมสแกนนิ้วออก', 0)) * 3) - (ps.get('ขาดงาน', 0) * 5), 0)
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("⭐ คะแนน", f"{score}/100")
-            c2.metric("⚠️ สาย", ps.get('สาย', 0))
-            c3.metric("❌ ขาด", ps.get('ขาดงาน', 0))
-            c4.metric("🔔 ลืมสแกน", ps.get('ลืมสแกนนิ้วเข้า', 0) + ps.get('ลืมสแกนนิ้วออก', 0))
-            st.dataframe(style_status_table(format_df_for_display(df_p[['วันที่', 'เข้างาน', 'ออกงาน', 'สถานะ']])), use_container_width=True)
+            unexcused_late = ps.get('สาย', 0)
+            missed_in = ps.get('ลืมสแกนนิ้วเข้า', 0)
+            missed_out = ps.get('ลืมสแกนนิ้วออก', 0)
+            unauth_absent = ps.get('ขาดงาน', 0)
+            leave_p_count = sum(cnt for stat, cnt in ps.items() if 'ลา' in stat or 'ครึ่งวัน' in stat)
+
+            score = max(100 - (unexcused_late * 2) - ((missed_in + missed_out) * 3) - (unauth_absent * 5), 0)
+            c1, c2, c3, c4, c5 = st.columns(5)
+            c1.metric("⭐ คะแนนวินัย", f"{score}/100")
+            c2.metric("⚠️ สาย", unexcused_late + ps.get('สาย (มีใบขออนุญาต)', 0))
+            c3.metric("🏖️ ลา (มีใบลา)", leave_p_count)
+            c4.metric("❌ ขาด (ไม่มีใบลา)", unauth_absent)
+            c5.metric("🔔 ลืมสแกน", missed_in + missed_out)
+
+            p_cols = ['วันที่', 'เข้างาน', 'ออกงาน', 'สถานะ']
+            if 'ประเภทการลา' in df_p.columns:
+                p_cols.extend(['ประเภทการลา', 'หมายเหตุการลา'])
+            st.dataframe(style_status_table(format_df_for_display(df_p[p_cols])), use_container_width=True)
+
+    with tab5:
+        st.subheader("🏖️ ตรวจสอบเปรียบเทียบข้อมูลสแกนนิ้วกับวันลา")
+        st.markdown("ระบบวิเคราะห์เปรียบเทียบระหว่างข้อมูลการสแกนนิ้วกับตารางการลา เพื่อคัดกรองว่าผู้ที่ขาดงานหรือลืมสแกนมีใบลาที่ได้รับอนุมัติหรือไม่")
+
+        sel_dept_cross = st.selectbox("🏢 กรองตามฝ่าย/กลุ่มงาน:", dept_options, key="cross_dept")
+        df_cross = filter_by_dept(master_df, sel_dept_cross)
+
+        total_records = len(df_cross)
+        leave_records = df_cross[df_cross['มีใบลา'] == True] if 'มีใบลา' in df_cross.columns else pd.DataFrame()
+        absent_records = df_cross[df_cross['สถานะ'] == 'ขาดงาน']
+        forget_records = df_cross[df_cross['สถานะ'].isin(['ลืมสแกนนิ้วเข้า', 'ลืมสแกนนิ้วออก'])]
+
+        ck1, ck2, ck3, ck4 = st.columns(4)
+        ck1.metric("👥 รายการทั้งหมด", f"{total_records} รายการ")
+        ck2.metric("✅ มีใบลาอนุมัติถูกต้อง", f"{len(leave_records)} รายการ")
+        ck3.metric("🚨 ขาดงานจริง (ไม่มีใบลา)", f"{len(absent_records)} คน")
+        ck4.metric("🔔 ลืมสแกน (ไม่มีใบลา)", f"{len(forget_records)} ครั้ง")
+        st.markdown("---")
+
+        sub_c1, sub_c2, sub_c3 = st.tabs([
+            f"✅ ผู้มีใบลาอนุมัติ ({len(leave_records)})",
+            f"🚨 ขาดงานจริงไม่มีใบลา ({len(absent_records)})",
+            f"🔔 ลืมสแกนไม่มีใบลา ({len(forget_records)})"
+        ])
+
+        with sub_c1:
+            if not leave_records.empty:
+                st.success(f"พบเจ้าหน้าที่ที่มีใบลาถูกต้องจำนวน {len(leave_records)} รายการ (ปรับสถานะอัตโนมัติ ไม่ถือว่าขาดงาน)")
+                cols_l = ['วันที่', 'แผนก', 'ชื่อ-สกุล', 'เข้างาน', 'ออกงาน', 'ประเภทการลา', 'สถานะ', 'หมายเหตุการลา']
+                cols_l = [c for c in cols_l if c in leave_records.columns]
+                st.dataframe(style_status_table(format_df_for_display(leave_records[cols_l])), use_container_width=True)
+            else:
+                st.info("ไม่พบรายการที่มีการลาในกลุ่มที่เลือก")
+
+        with sub_c2:
+            if not absent_records.empty:
+                st.error(f"⚠️ พบเจ้าหน้าที่ขาดงานโดยไม่มีใบลาจำนวน {len(absent_records)} รายการ (ควรดำเนินการตรวจสอบหรือติดตามใบลา)")
+                cols_a = ['วันที่', 'แผนก', 'ชื่อ-สกุล', 'เข้างาน', 'ออกงาน', 'สถานะ']
+                st.dataframe(style_status_table(format_df_for_display(absent_records[cols_a])), use_container_width=True)
+            else:
+                st.success("✨ ไม่มีเจ้าหน้าที่ขาดงานโดยไม่มีใบลาในกลุ่มที่เลือก")
+
+        with sub_c3:
+            if not forget_records.empty:
+                st.warning(f"พบรายการลืมสแกนนิ้วเข้าหรือออกที่ไม่มีใบลา {len(forget_records)} รายการ")
+                cols_f = ['วันที่', 'แผนก', 'ชื่อ-สกุล', 'เข้างาน', 'ออกงาน', 'สถานะ']
+                st.dataframe(style_status_table(format_df_for_display(forget_records[cols_f])), use_container_width=True)
+            else:
+                st.success("✨ ไม่มีรายการลืมสแกนนิ้วในกลุ่มที่เลือก")
+
+        dept_tag_c = f"_{sel_dept_cross}" if sel_dept_cross != "ทั้งหมด" else ""
+        btn_cross_label = "📥 ดาวน์โหลดรายงานตรวจสอบวันลา (Excel)" + (f" - {sel_dept_cross}" if sel_dept_cross != "ทั้งหมด" else "")
+        st.download_button(
+            btn_cross_label,
+            cross_check_to_excel_bytes(df_cross, sel_dept_cross),
+            f"leave_cross_check_report{dept_tag_c}.xlsx",
+            use_container_width=True
+        )
 else:
     st.info("👈 โปรดอัปโหลดไฟล์ PDF ในแท็บ 'นำเข้าข้อมูล' ก่อนครับ")

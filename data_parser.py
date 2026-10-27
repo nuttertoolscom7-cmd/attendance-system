@@ -27,7 +27,11 @@ def load_data(file_source):
     
     sheets = excel_file.sheet_names
     
-    relevant_sheets = ['ต.ค 67-ก.ย 68', 'ต.ค 68-ก.ย 69 (2)']
+    # ดึงชีตปีงบประมาณอัตโนมัติ (เช่น ต.ค 67-ก.ย 68, ต.ค 68-ก.ย 69, ต.ค 69-ก.ย 70)
+    import re
+    relevant_sheets = [s for s in sheets if re.search(r'ต\.?ค.*ก\.?ย', s)]
+    if not relevant_sheets:
+        relevant_sheets = [s for s in ['ต.ค 67-ก.ย 68', 'ต.ค 68-ก.ย 69 (2)'] if s in sheets]
     all_details = []
     
     for sheet_name in relevant_sheets:
@@ -36,15 +40,24 @@ def load_data(file_source):
             
         df = pd.read_excel(source_for_pd, sheet_name=sheet_name)
         source_for_pd.seek(0) # Reset for next iteration if needed
+        
+        month_col = 'เดือน'
+        if month_col not in df.columns:
+            continue
+            
         ws = wb[sheet_name]
         
         # Identify columns
         name_col = df.columns[0]
-        month_col = 'เดือน'
         day_cols = df.columns[2:33] # Columns 1 to 31
         remark_col = 'หมายเหตุ'
         
-        budget_year = '2568' if '67-ก.ย 68' in sheet_name else '2569'
+        year_match = re.search(r'ก\.?ย\.?\s*(\d{2,4})', sheet_name)
+        if year_match:
+            y_val = int(year_match.group(1))
+            budget_year = str(2500 + y_val if y_val < 100 else y_val)
+        else:
+            budget_year = '2568' if '67' in sheet_name else '2569'
         
         # Mapping for symbols
         type_map = {'ป': 'ลาป่วย', 'ก': 'ลากิจ', 'พ': 'ลาพักผ่อน', 'ส': 'สาย', 'ป.': 'ลาป่วย'}

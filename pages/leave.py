@@ -78,8 +78,16 @@ def get_data(file_source, _force_refresh=1):
 if uploaded_file is not None:
     with st.spinner('กำลังประมวลผลข้อมูล...'):
         df = get_data(uploaded_file, _force_refresh=2)
-    
-    if df is None or df.empty:
+        if df is not None and not df.empty:
+            st.session_state.leave_df = df
+elif 'leave_df' in st.session_state and st.session_state.leave_df is not None:
+    df = st.session_state.leave_df
+    st.sidebar.info("💡 กำลังใช้ข้อมูลตารางวันลาที่นำเข้าจากระบบ")
+else:
+    df = None
+
+if df is not None:
+    if df.empty:
         st.error("❌ ไม่พบข้อมูลการลาในไฟล์ที่อัปโหลด หรือรูปแบบไฟล์ไม่ถูกต้อง")
     else:
         # --- Sidebar Filters ---
