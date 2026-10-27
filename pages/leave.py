@@ -8,64 +8,180 @@ from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 
 # Page configuration
 
-# --- Custom CSS for Professional Look ---
+# --- Custom CSS for Playful Warm Look ---
 st.markdown("""
 <style>
-    /* Main fonts */
-    .stApp {
-        font-family: 'Sarabun', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    @import url('https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700&family=Sarabun:wght@300;400;500;600;700&display=swap');
+
+    html, body, [class*="css"], .stApp {
+        font-family: 'Prompt', 'Sarabun', sans-serif !important;
+        background-color: #FDFBF7 !important;
+        color: #2D2825 !important;
     }
-    
+
+    [data-testid="stSidebar"] {
+        background-color: #F8F3EA !important;
+        border-right: 1.5px solid #EAE1D3 !important;
+    }
+    [data-testid="stSidebarNav"] span {
+        font-family: 'Prompt', sans-serif !important;
+        font-weight: 500 !important;
+    }
+
+    h1, h2, h3, h4, h5, h6 {
+        font-family: 'Prompt', sans-serif !important;
+        font-weight: 700 !important;
+        color: #2D2825 !important;
+    }
+
+    .stMarkdown, .stTable, .stDataFrame, td, th {
+        font-family: 'Sarabun', 'Prompt', sans-serif !important;
+        line-height: 1.6 !important;
+    }
+
     /* Hide Streamlit branding */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
 
-    /* Style Metric Cards */
-    div[data-testid="metric-container"] {
-        border-radius: 10px;
-        padding: 20px;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-        transition: transform 0.2s;
-    }
-    div[data-testid="metric-container"]:hover {
-        transform: translateY(-5px);
-        box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
-    }
-    div[data-testid="metric-container"] > div {
-        text-align: center;
-    }
-    div[data-testid="metric-container"] label {
-        font-size: 1.1rem !important;
-        font-weight: 600;
-    }
-    div[data-testid="metric-container"] div[data-testid="stMetricValue"] {
-        font-size: 2.5rem !important;
-        font-weight: bold;
+    /* Header Banner */
+    .leave-header-container {
+        background: linear-gradient(135deg, #FFF6EE 0%, #FEF1DE 45%, #F5F9F4 100%);
+        border: 2px solid #F5E6D3;
+        border-radius: 24px;
+        padding: 26px 30px;
+        margin-bottom: 22px;
+        box-shadow: 0 12px 30px -10px rgba(233, 125, 50, 0.12);
     }
 
-    /* Headers */
-    h1, h2, h3 {
-        font-weight: 700;
+    .leave-pill-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 5px 14px;
+        background: #FFFFFF;
+        border: 1px solid #F0D7C2;
+        border-radius: 9999px;
+        font-size: 0.82rem;
+        font-weight: 600;
+        color: #D4661B;
+        box-shadow: 0 2px 6px rgba(212, 102, 27, 0.08);
+        margin-bottom: 10px;
     }
-    
+
+    .leave-header-title {
+        font-size: 1.85rem !important;
+        font-weight: 700 !important;
+        color: #2D2825 !important;
+        margin: 0 0 6px 0 !important;
+    }
+
+    .leave-header-sub {
+        font-size: 0.98rem;
+        color: #6E655E;
+        margin: 0;
+    }
+
+    /* Tabs */
+    div[data-testid="stTabs"] {
+        margin-top: 8px;
+        margin-bottom: 24px;
+    }
+
+    div[data-baseweb="tab-list"] {
+        gap: 8px !important;
+        background-color: #F4EFE6 !important;
+        padding: 6px !important;
+        border-radius: 9999px !important;
+        border: 1px solid #EAE1D3 !important;
+        display: inline-flex !important;
+    }
+
+    button[data-baseweb="tab"] {
+        border-radius: 9999px !important;
+        padding: 8px 20px !important;
+        font-family: 'Prompt', sans-serif !important;
+        font-weight: 500 !important;
+        font-size: 0.92rem !important;
+        color: #6B625B !important;
+        background-color: transparent !important;
+        border: none !important;
+        transition: all 0.25s cubic-bezier(0.25, 0.8, 0.25, 1) !important;
+    }
+
+    button[data-baseweb="tab"]:hover {
+        color: #E97D32 !important;
+        background-color: rgba(255, 255, 255, 0.7) !important;
+    }
+
+    button[data-baseweb="tab"][aria-selected="true"] {
+        background: linear-gradient(135deg, #FF8E42 0%, #E97D32 100%) !important;
+        color: #FFFFFF !important;
+        font-weight: 600 !important;
+        box-shadow: 0 4px 14px rgba(233, 125, 50, 0.35) !important;
+    }
+
+    div[data-baseweb="tab-border"], div[data-baseweb="tab-highlight"] {
+        display: none !important;
+    }
+
+    /* Style Metric Cards */
+    div[data-testid="stMetric"], div[data-testid="metric-container"] {
+        background: #FFFFFF !important;
+        border: 1.5px solid #EFE6DA !important;
+        border-radius: 20px !important;
+        padding: 18px 20px !important;
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.03) !important;
+        transition: all 0.25s cubic-bezier(0.25, 0.8, 0.25, 1) !important;
+    }
+    div[data-testid="stMetric"]:hover, div[data-testid="metric-container"]:hover {
+        transform: translateY(-5px) !important;
+        box-shadow: 0 12px 28px -4px rgba(233, 125, 50, 0.16) !important;
+        border-color: #E97D32 !important;
+    }
+    div[data-testid="stMetricLabel"], div[data-testid="metric-container"] label {
+        font-family: 'Prompt', sans-serif !important;
+        font-size: 0.95rem !important;
+        font-weight: 600 !important;
+        color: #6B625B !important;
+    }
+    div[data-testid="stMetricValue"], div[data-testid="metric-container"] div[data-testid="stMetricValue"] {
+        font-family: 'Prompt', 'Sarabun', sans-serif !important;
+        font-size: 2rem !important;
+        font-weight: 700 !important;
+        color: #2D2825 !important;
+    }
+
     /* Table styling improvements */
-    .stDataFrame {
-        border-radius: 10px;
-        overflow: hidden;
+    .stDataFrame, div[data-testid="stDataFrame"] {
+        border-radius: 18px !important;
+        overflow: hidden !important;
+        border: 1.5px solid #EFE6DA !important;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.03) !important;
+    }
+
+    /* Buttons */
+    div.stButton > button, div.stDownloadButton > button {
+        border-radius: 9999px !important;
+        font-family: 'Prompt', sans-serif !important;
+        font-weight: 600 !important;
+        padding: 10px 24px !important;
+        transition: all 0.25s ease !important;
+    }
+    div.stButton > button:hover, div.stDownloadButton > button:hover {
+        transform: translateY(-2px) scale(1.01) !important;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # --- Header Section ---
-col_logo, col_title = st.columns([1, 10])
-with col_logo:
-    st.markdown('<div style="font-size: 50px; margin-top: 10px;">🏢</div>', unsafe_allow_html=True)
-with col_title:
-    st.title("ระบบตรวจสอบข้อมูลการลาบุคลากร")
-    st.markdown("<p style='color: #666; font-size: 1.1rem;'>วิเคราะห์และสรุปผลข้อมูลการลาประจำปี (ป่วย, กิจ, พักผ่อน, สาย)</p>", unsafe_allow_html=True)
-
-st.markdown("---")
+st.markdown("""
+<div class="leave-header-container">
+    <div class="leave-pill-badge">🏖️ LEAVE TRACKER & ANALYTICS</div>
+    <div class="leave-header-title">ระบบตรวจสอบข้อมูลการลาบุคลากร</div>
+    <p class="leave-header-sub">วิเคราะห์และสรุปผลข้อมูลการลาประจำปี (ป่วย, กิจ, พักผ่อน, สาย) ศูนย์ฝึกพาณิชย์นาวี</p>
+</div>
+""", unsafe_allow_html=True)
 
 # --- File Uploader ---
 st.sidebar.markdown("### 📂 นำเข้าข้อมูล")

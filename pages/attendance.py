@@ -18,20 +18,255 @@ from data_parser import load_data
 # ตั้งค่าหน้าเว็บและ CSS
 # -------------------------
 
-# ฉีด CSS เพื่อแก้ปัญหาสระลอยและจัดฟอนต์เฉพาะส่วนเนื้อหา (ไม่ให้กระทบ UI หลัก)
+# ฉีด CSS ดีไซน์ Playful Modern อบอุ่น สไตล์ Sonnenbloom (แก้สระลอย + ปรับแต่ง UI ครบวงจร)
 st.markdown("""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700&display=swap');
-    
-    /* เน้นแก้เฉพาะส่วนที่เป็นตารางและข้อความบรรยาย */
-    .stMarkdown, .stTable, .stDataFrame, [data-testid="stMetricValue"] {
-        font-family: 'Sarabun', 'Tahoma', sans-serif !important;
+    @import url('https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700&family=Sarabun:wght@300;400;500;600;700&display=swap');
+
+    html, body, [class*="css"], .stApp {
+        font-family: 'Prompt', 'Sarabun', sans-serif !important;
+        background-color: #FDFBF7 !important;
+        color: #2D2825 !important;
     }
-    
-    /* ปรับแต่งตารางให้สระไม่ลอย */
-    td, th {
-        font-family: 'Sarabun', 'Tahoma', sans-serif !important;
+
+    [data-testid="stSidebar"] {
+        background-color: #F8F3EA !important;
+        border-right: 1.5px solid #EAE1D3 !important;
+    }
+    [data-testid="stSidebarNav"] span {
+        font-family: 'Prompt', sans-serif !important;
+        font-weight: 500 !important;
+    }
+
+    h1, h2, h3, h4, h5, h6 {
+        font-family: 'Prompt', sans-serif !important;
+        font-weight: 700 !important;
+        color: #2D2825 !important;
+    }
+
+    .stMarkdown, .stTable, .stDataFrame, td, th {
+        font-family: 'Sarabun', 'Prompt', sans-serif !important;
         line-height: 1.6 !important;
+    }
+
+    /* Custom Header Banner */
+    .att-header-container {
+        background: linear-gradient(135deg, #FFF6EE 0%, #FEF1DE 45%, #F5F9F4 100%);
+        border: 2px solid #F5E6D3;
+        border-radius: 24px;
+        padding: 26px 30px;
+        margin-bottom: 22px;
+        box-shadow: 0 12px 30px -10px rgba(233, 125, 50, 0.12);
+    }
+
+    .att-pill-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 5px 14px;
+        background: #FFFFFF;
+        border: 1px solid #F0D7C2;
+        border-radius: 9999px;
+        font-size: 0.82rem;
+        font-weight: 600;
+        color: #D4661B;
+        box-shadow: 0 2px 6px rgba(212, 102, 27, 0.08);
+        margin-bottom: 10px;
+    }
+
+    .att-header-title {
+        font-size: 1.85rem !important;
+        font-weight: 700 !important;
+        color: #2D2825 !important;
+        margin: 0 0 6px 0 !important;
+    }
+
+    .att-header-sub {
+        font-size: 0.98rem;
+        color: #6E655E;
+        margin: 0;
+    }
+
+    .status-badge-ready {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        background: #E8F5E9;
+        border: 1.5px solid #C8E6C9;
+        color: #2E7D32;
+        padding: 8px 18px;
+        border-radius: 9999px;
+        font-weight: 600;
+        font-size: 0.88rem;
+        box-shadow: 0 2px 8px rgba(46, 125, 50, 0.1);
+    }
+
+    .status-badge-empty {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        background: #F8F5EE;
+        border: 1.5px solid #EAE1D3;
+        color: #7A7067;
+        padding: 8px 18px;
+        border-radius: 9999px;
+        font-weight: 600;
+        font-size: 0.88rem;
+    }
+
+    /* Custom Streamlit Tabs (Pill Segmented Control) */
+    div[data-testid="stTabs"] {
+        margin-top: 8px;
+        margin-bottom: 24px;
+    }
+
+    div[data-baseweb="tab-list"] {
+        gap: 8px !important;
+        background-color: #F4EFE6 !important;
+        padding: 6px !important;
+        border-radius: 9999px !important;
+        border: 1px solid #EAE1D3 !important;
+        display: inline-flex !important;
+        flex-wrap: wrap !important;
+    }
+
+    button[data-baseweb="tab"] {
+        border-radius: 9999px !important;
+        padding: 8px 18px !important;
+        font-family: 'Prompt', sans-serif !important;
+        font-weight: 500 !important;
+        font-size: 0.92rem !important;
+        color: #6B625B !important;
+        background-color: transparent !important;
+        border: none !important;
+        transition: all 0.25s cubic-bezier(0.25, 0.8, 0.25, 1) !important;
+    }
+
+    button[data-baseweb="tab"]:hover {
+        color: #E97D32 !important;
+        background-color: rgba(255, 255, 255, 0.7) !important;
+    }
+
+    button[data-baseweb="tab"][aria-selected="true"] {
+        background: linear-gradient(135deg, #FF8E42 0%, #E97D32 100%) !important;
+        color: #FFFFFF !important;
+        font-weight: 600 !important;
+        box-shadow: 0 4px 14px rgba(233, 125, 50, 0.35) !important;
+    }
+
+    div[data-baseweb="tab-border"], div[data-baseweb="tab-highlight"] {
+        display: none !important;
+    }
+
+    /* Metric Cards */
+    div[data-testid="stMetric"] {
+        background: #FFFFFF !important;
+        border: 1.5px solid #EFE6DA !important;
+        border-radius: 20px !important;
+        padding: 18px 20px !important;
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.03) !important;
+        transition: all 0.25s cubic-bezier(0.25, 0.8, 0.25, 1) !important;
+    }
+
+    div[data-testid="stMetric"]:hover {
+        transform: translateY(-5px) !important;
+        box-shadow: 0 12px 28px -4px rgba(233, 125, 50, 0.16) !important;
+        border-color: #E97D32 !important;
+    }
+
+    div[data-testid="stMetricLabel"] {
+        font-family: 'Prompt', sans-serif !important;
+        font-size: 0.95rem !important;
+        font-weight: 600 !important;
+        color: #6B625B !important;
+    }
+
+    div[data-testid="stMetricValue"] {
+        font-family: 'Prompt', 'Sarabun', sans-serif !important;
+        font-size: 2rem !important;
+        font-weight: 700 !important;
+        color: #2D2825 !important;
+    }
+
+    /* Custom Buttons */
+    div.stButton > button {
+        border-radius: 9999px !important;
+        font-family: 'Prompt', sans-serif !important;
+        font-weight: 600 !important;
+        font-size: 0.98rem !important;
+        padding: 10px 24px !important;
+        transition: all 0.25s ease !important;
+    }
+
+    div.stButton > button:hover {
+        transform: translateY(-2px) scale(1.01) !important;
+    }
+
+    div.stDownloadButton > button {
+        border-radius: 9999px !important;
+        font-family: 'Prompt', sans-serif !important;
+        font-weight: 600 !important;
+        font-size: 0.95rem !important;
+        padding: 10px 22px !important;
+        border: 1.5px solid #EFE6DA !important;
+        background: #FFFFFF !important;
+        color: #2D2825 !important;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.04) !important;
+        transition: all 0.25s ease !important;
+    }
+
+    div.stDownloadButton > button:hover {
+        background: #FFF6EE !important;
+        border-color: #E97D32 !important;
+        color: #D4661B !important;
+        transform: translateY(-2px) !important;
+    }
+
+    /* File Uploaders */
+    div[data-testid="stFileUploaderDropzone"] {
+        border: 2px dashed #E28743 !important;
+        background: #FFFCF8 !important;
+        border-radius: 20px !important;
+        padding: 22px !important;
+        transition: all 0.25s ease !important;
+    }
+
+    div[data-testid="stFileUploaderDropzone"]:hover {
+        background: #FFF5EC !important;
+        border-color: #D4661B !important;
+    }
+
+    /* Dataframe containers */
+    div[data-testid="stDataFrame"] {
+        border-radius: 18px !important;
+        overflow: hidden !important;
+        border: 1.5px solid #EFE6DA !important;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.03) !important;
+    }
+
+    /* Score Badge */
+    .score-badge {
+        display: inline-block;
+        padding: 6px 16px;
+        border-radius: 9999px;
+        font-weight: 600;
+        font-size: 0.92rem;
+        margin-top: 8px;
+    }
+    .score-high {
+        background: #E8F5E9;
+        color: #2E7D32;
+        border: 1px solid #C8E6C9;
+    }
+    .score-med {
+        background: #FFF8E1;
+        color: #F57F17;
+        border: 1px solid #FFE082;
+    }
+    .score-low {
+        background: #FFEBEE;
+        color: #C62828;
+        border: 1px solid #FFCDD2;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -781,6 +1016,30 @@ def style_status_table(df: pd.DataFrame):
     return df.style.map(highlight, subset=subset) if hasattr(df.style, "map") else df.style.applymap(highlight, subset=subset)
 
 # -------------------------
+# UI Header Banner
+# -------------------------
+if 'master_df' in st.session_state:
+    _m = st.session_state.master_df
+    status_badge_html = f'<div class="status-badge-ready">🟢 ข้อมูลพร้อม: <b>{len(_m)}</b> รายการ (<b>{_m["ชื่อ-สกุล"].nunique()}</b> คน)</div>'
+else:
+    status_badge_html = '<div class="status-badge-empty">⚪ รอนำเข้าข้อมูล (เริ่มที่แท็บ 1)</div>'
+
+st.markdown(f"""
+<div class="att-header-container">
+    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+        <div>
+            <div class="att-pill-badge">⏱️ ATTENDANCE & LEAVE INTELLIGENCE</div>
+            <h2 class="att-header-title">ระบบบันทึกเวลาและการปฏิบัติงาน</h2>
+            <p class="att-header-sub">วิเคราะห์เวลาสแกนนิ้วมือ ตรวจจับเวลาสาย ลืมสแกน และตรวจเทียบวันลาอัตโนมัติ</p>
+        </div>
+        <div>
+            {status_badge_html}
+        </div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
+# -------------------------
 # UI Tabs
 # -------------------------
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["📤 นำเข้าข้อมูล", "📅 ภาพรวมรายวัน", "📈 สถิติรายเดือน", "👤 ข้อมูลรายบุคคล", "🏖️ ตรวจสอบเทียบวันลา"])
@@ -986,6 +1245,17 @@ if 'master_df' in st.session_state:
             leave_p_count = sum(cnt for stat, cnt in ps.items() if 'ลา' in stat or 'ครึ่งวัน' in stat)
 
             score = max(100 - (unexcused_late * 2) - ((missed_in + missed_out) * 3) - (unauth_absent * 5), 0)
+            if score >= 90:
+                score_badge_text = "🌟 ยอดเยี่ยม (วินัยดีเด่น)"
+                score_cls = "score-high"
+            elif score >= 75:
+                score_badge_text = "👍 ปานกลาง (ปฏิบัติตามเกณฑ์)"
+                score_cls = "score-med"
+            else:
+                score_badge_text = "⚠️ ควรปรับปรุง (มีรายการสาย/ขาด/ลืมสแกน)"
+                score_cls = "score-low"
+            st.markdown(f'<div class="score-badge {score_cls}">{score_badge_text}</div><div style="height: 12px;"></div>', unsafe_allow_html=True)
+
             c1, c2, c3, c4, c5 = st.columns(5)
             c1.metric("⭐ คะแนนวินัย", f"{score}/100")
             c2.metric("⚠️ สาย", unexcused_late + ps.get('สาย (มีใบขออนุญาต)', 0))
@@ -1009,6 +1279,27 @@ if 'master_df' in st.session_state:
         leave_records = df_cross[df_cross['มีใบลา'] == True] if 'มีใบลา' in df_cross.columns else pd.DataFrame()
         absent_records = df_cross[df_cross['สถานะ'] == 'ขาดงาน']
         forget_records = df_cross[df_cross['สถานะ'].isin(['ลืมสแกนนิ้วเข้า', 'ลืมสแกนนิ้วออก'])]
+
+        if len(absent_records) == 0:
+            st.markdown("""
+            <div style="background: #E8F5E9; border: 1.5px solid #A5D6A7; border-radius: 18px; padding: 14px 20px; display: flex; align-items: center; gap: 14px; margin-bottom: 18px;">
+                <span style="font-size: 1.8rem;">🎉</span>
+                <div>
+                    <div style="font-weight: 700; color: #2E7D32; font-size: 1rem;">ยอดเยี่ยม! ไม่มีเจ้าหน้าที่ขาดงานโดยไม่มีใบลา</div>
+                    <div style="font-size: 0.88rem; color: #43A047;">เจ้าหน้าที่ทุกคนมีข้อมูลเวลาสแกนนิ้ว หรือมีบันทึกการลาที่ได้รับการอนุมัติถูกต้องครบถ้วน</div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div style="background: #FFEBEE; border: 1.5px solid #FFCDD2; border-radius: 18px; padding: 14px 20px; display: flex; align-items: center; gap: 14px; margin-bottom: 18px;">
+                <span style="font-size: 1.8rem;">🚨</span>
+                <div>
+                    <div style="font-weight: 700; color: #C62828; font-size: 1rem;">พบเจ้าหน้าที่ขาดงานโดยไม่มีใบลา {len(absent_records)} รายการ</div>
+                    <div style="font-size: 0.88rem; color: #E53935;">โปรดตรวจสอบหรือติดตามเอกสารการลากับเจ้าหน้าที่ เพื่อดำเนินการตามระเบียบงานบุคคลต่อไป</div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
 
         ck1, ck2, ck3, ck4 = st.columns(4)
         ck1.metric("👥 รายการทั้งหมด", f"{total_records} รายการ")
