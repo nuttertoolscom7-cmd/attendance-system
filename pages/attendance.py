@@ -129,7 +129,25 @@ def month_name_thai(month_num):
               "กรกฎาคม","สิงหาคม","กันยายน","ตุลาคม","พฤศจิกายน","ธันวาคม"]
     return months[month_num-1] if 1 <= month_num <= 12 else ""
 
-def df_to_excel_bytes(pivot: pd.DataFrame, df_all: pd.DataFrame):
+def get_department_options(df: pd.DataFrame):
+    """ดึงรายชื่อฝ่าย/กลุ่มงานที่มีอยู่ใน DataFrame จัดเรียงตามมาตรฐาน"""
+    existing = df['แผนก'].dropna().unique().tolist()
+    ordered = [d for d in DEPT_VARIANTS if d in existing]
+    others = [d for d in existing if d and d not in DEPT_VARIANTS]
+    ordered.extend(sorted(others))
+    if '' in existing or df['แผนก'].isna().any():
+        ordered.append("ไม่ระบุฝ่าย")
+    return ordered
+
+def filter_by_dept(df: pd.DataFrame, selected_dept: str):
+    """กรอง DataFrame ตามฝ่าย/กลุ่มงาน"""
+    if not selected_dept or selected_dept == "ทั้งหมด":
+        return df
+    if selected_dept == "ไม่ระบุฝ่าย":
+        return df[df['แผนก'].isin(['', None]) | df['แผนก'].isna()]
+    return df[df['แผนก'] == selected_dept]
+
+def df_to_excel_bytes(pivot: pd.DataFrame, df_all: pd.DataFrame, dept_label: str = ""):
     output = BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
         pivot.to_excel(writer, sheet_name="Summary", startrow=2, index=True)
@@ -146,12 +164,13 @@ def df_to_excel_bytes(pivot: pd.DataFrame, df_all: pd.DataFrame):
         valid_dates = df_all['วันที่'].dropna()
         month_th = month_name_thai(int(valid_dates.dt.month.mode()[0])) if not valid_dates.empty else "ไม่ระบุ"
         year_be = int(valid_dates.dt.year.mode()[0]) + 543 if not valid_dates.empty else ""
-        header_text = f"รายงานการเข้า-ออกงาน ประจำเดือน {month_th} {year_be}".strip()
+        sub_dept = f" ({dept_label})" if dept_label and dept_label != "ทั้งหมด" else ""
+        header_text = f"รายงานการเข้า-ออกงาน{sub_dept} ประจำเดือน {month_th} {year_be}".strip()
         merge_format = workbook.add_format({'bold': True, 'font_name': base_font, 'font_size': 18, 'align': 'center', 'valign': 'bottom'})
         worksheet.merge_range(0, 0, 0, len(pivot.columns), header_text, merge_format)
     return output.getvalue()
 
-def daily_to_excel_bytes(df_day: pd.DataFrame, report_date):
+def daily_to_excel_bytes(df_day: pd.DataFrame, report_date, dept_label: str = ""):
     output = BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
         export_df = df_day[['แผนก', 'ชื่อ-สกุล', 'เข้างาน', 'ออกงาน', 'สถานะ']]
@@ -164,26 +183,24 @@ def daily_to_excel_bytes(df_day: pd.DataFrame, report_date):
         for row in range(len(export_df) + 3): worksheet.set_row(row, 30, base_format)
         for col_num, value in enumerate(export_df.columns.values): worksheet.write(2, col_num, value, header_format)
         worksheet.set_column(0, 0, 20, base_format); worksheet.set_column(1, 1, 35, name_format); worksheet.set_column(2, 4, 15, base_format)
-        header_text = f"รายงานการเข้า-ออกงาน ประจำวันที่ {report_date.strftime('%d/%m/%Y')}"
+        sub_dept = f" ({dept_label})" if dept_label and dept_label != "ทั้งหมด" else ""
+        header_text = f"รายงานการเข้า-ออกงาน{sub_dept} ประจำวันที่ {report_date.strftime('%d/%m/%Y')}"
         merge_format = workbook.add_format({'bold': True, 'font_name': base_font, 'font_size': 18, 'align': 'center', 'valign': 'bottom'})
         worksheet.merge_range(0, 0, 0, len(export_df.columns)-1, header_text, merge_format)
     return output.getvalue()
 
-def missing_scan_to_excel_bytes(df_all: pd.DataFrame):
+def missing_scan_to_excel_bytes(df_all: pd.DataFrame, dept_label: str = ""):
     output = BytesIO()
     
     # 1. Prepare data
-    # Filter only relevant statuses
     missing_statuses = ['ลืมสแกนนิ้วเข้า', 'ลืมสแกนนิ้วออก', 'ขาดงาน']
     df_missing = df_all[df_all['สถานะ'].isin(missing_statuses)].copy()
     
     if df_missing.empty:
-        # Create an empty but structured Excel if no data
         with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
             pd.DataFrame().to_excel(writer, sheet_name="Missing_Scans")
         return output.getvalue()
 
-    # Function to format date detail
     def format_detail(row):
         d = row['วันที่']
         status = row['สถานะ']
@@ -198,16 +215,13 @@ def missing_scan_to_excel_bytes(df_all: pd.DataFrame):
 
     df_missing['detail'] = df_missing.apply(format_detail, axis=1)
     
-    # Group by Dept and Name
     grouped = df_missing.groupby(['แผนก', 'ชื่อ-สกุล']).agg({
         'detail': lambda x: "\n".join(x),
         'วันที่': 'count'
     }).reset_index()
     
-    # Rename columns to match template
     grouped.columns = ['แผนก', 'ชื่อ - สกุล', 'วันที่ไม่พบข้อมูล', 'จำนวนวันที่ไม่พบข้อมูล']
     
-    # Get metadata for header
     valid_dates = df_all['วันที่'].dropna()
     month_th = month_name_thai(int(valid_dates.dt.month.mode()[0])) if not valid_dates.empty else "ไม่ระบุ"
     year_be_header = int(valid_dates.dt.year.mode()[0]) + 543 if not valid_dates.empty else ""
@@ -216,7 +230,6 @@ def missing_scan_to_excel_bytes(df_all: pd.DataFrame):
         workbook = writer.book
         worksheet = workbook.add_worksheet("Missing_Scans")
         
-        # Formats
         base_font = 'TH SarabunPSK'
         title_format = workbook.add_format({'bold': True, 'font_name': base_font, 'font_size': 18, 'align': 'center'})
         header_format = workbook.add_format({'bold': True, 'font_name': base_font, 'font_size': 14, 'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#D9D9D9'})
@@ -224,27 +237,22 @@ def missing_scan_to_excel_bytes(df_all: pd.DataFrame):
         data_center_format = workbook.add_format({'font_name': base_font, 'font_size': 14, 'align': 'center', 'valign': 'vcenter', 'border': 1})
         data_left_format = workbook.add_format({'font_name': base_font, 'font_size': 14, 'align': 'left', 'valign': 'vcenter', 'border': 1, 'text_wrap': True})
         
-        # 1. Header Rows
-        worksheet.merge_range('A1:K1', "รายงานการสแกนนิ้วมือในการเข้า - ออกงานของเจ้าหน้าที่", title_format)
+        sub_title = f" ({dept_label})" if dept_label and dept_label != "ทั้งหมด" else ""
+        worksheet.merge_range('A1:K1', f"รายงานการสแกนนิ้วมือในการเข้า - ออกงานของเจ้าหน้าที่{sub_title}", title_format)
         worksheet.merge_range('A2:K2', "ศูนย์ฝึกพาณิชย์นาวี", title_format)
         worksheet.merge_range('A3:K3', f"ประจำเดือน {month_th} {year_be_header}", title_format)
         
-        # 2. Table Header (Row 4)
         headers = ['ลำดับ', 'ชื่อ - สกุล', 'จำนวนวันที่ไม่พบข้อมูล', '', '', '', 'วันที่ไม่พบข้อมูล', '', '', '', '']
         for col_num, header in enumerate(headers):
             worksheet.write(3, col_num, header, header_format)
-        # Merge header cells to match template look (approximate)
         worksheet.merge_range(3, 2, 3, 5, 'จำนวนวันที่ไม่พบข้อมูล', header_format)
         worksheet.merge_range(3, 6, 3, 10, 'วันที่ไม่พบข้อมูล', header_format)
         
-        # 3. Write Data
         curr_row = 4
         global_idx = 1
         
-        # Sort by department order if possible, or just unique depts
         depts = grouped['แผนก'].unique()
         for dept in depts:
-            # Write Dept Row
             worksheet.merge_range(curr_row, 0, curr_row, 10, dept if dept else "ไม่ระบุฝ่าย", dept_format)
             curr_row += 1
             
@@ -252,25 +260,19 @@ def missing_scan_to_excel_bytes(df_all: pd.DataFrame):
             for _, row in dept_data.iterrows():
                 worksheet.write(curr_row, 0, global_idx, data_center_format)
                 worksheet.write(curr_row, 1, row['ชื่อ - สกุล'], data_left_format)
-                
-                # Number of days (merged across 4 cells)
                 worksheet.merge_range(curr_row, 2, curr_row, 5, row['จำนวนวันที่ไม่พบข้อมูล'], data_center_format)
-                
-                # Details (merged across 5 cells)
                 worksheet.merge_range(curr_row, 6, curr_row, 10, row['วันที่ไม่พบข้อมูล'], data_left_format)
                 
-                # Adjust row height based on number of lines in detail
                 num_lines = row['วันที่ไม่พบข้อมูล'].count('\n') + 1
                 worksheet.set_row(curr_row, 20 * num_lines)
                 
                 curr_row += 1
                 global_idx += 1
                 
-        # Column Widths
         worksheet.set_column('A:A', 8)
         worksheet.set_column('B:B', 30)
-        worksheet.set_column('C:F', 5) # Merged for count
-        worksheet.set_column('G:K', 12) # Merged for details
+        worksheet.set_column('C:F', 5)
+        worksheet.set_column('G:K', 12)
         
     return output.getvalue()
 
@@ -485,67 +487,137 @@ with tab1:
         if all_data:
             master_df = unify_names(pd.concat(all_data, ignore_index=True)).drop_duplicates(subset=['ชื่อ-สกุล', 'วันที่'], keep='last')
             st.session_state.master_df = master_df
-            st.success(f"✅ ประมวลผลสำเร็จ! รวม {master_df['ชื่อ-สกุล'].nunique()} คน")
-        else: st.error("❌ ไม่พบข้อมูล")
+            st.success(f"✅ ประมวลผลสำเร็จ! รวม {master_df['ชื่อ-สกุล'].nunique()} คน ({len(master_df)} บันทึก)")
+            
+            # แสดงสรุปสถิติจำนวนคนแยกตามฝ่าย
+            dept_counts = master_df.drop_duplicates(subset=['ชื่อ-สกุล']).groupby(
+                master_df['แผนก'].replace({'': 'ไม่ระบุฝ่าย'})
+            )['ชื่อ-สกุล'].count().to_dict()
+            if dept_counts:
+                st.markdown("##### 👥 จำนวนบุคลากรจำแนกตามฝ่าย/กลุ่มงาน:")
+                d_cols = st.columns(max(len(dept_counts), 1))
+                for i, (dept_name, count) in enumerate(dept_counts.items()):
+                    d_cols[i % len(d_cols)].metric(f"🏢 {dept_name}", f"{count} คน")
+        else:
+            st.error("❌ ไม่พบข้อมูล")
         if all_skipped:
             with st.expander(f"⚠️ บรรทัดที่อ่านไม่ได้ {len(all_skipped)} บรรทัด (กดเพื่อตรวจสอบ)"):
                 st.text("\n".join(all_skipped))
 
 if 'master_df' in st.session_state:
     master_df = st.session_state.master_df
+    dept_options = ["ทั้งหมด"] + get_department_options(master_df)
+
     with tab2:
-        dates = sorted(master_df['วันที่'].dt.date.unique(), reverse=True)
-        sel_date = st.selectbox("📅 เลือกวันที่:", dates)
-        df_day = master_df[master_df['วันที่'].dt.date == sel_date]
+        c_date, c_dept = st.columns([1, 1])
+        with c_date:
+            dates = sorted(master_df['วันที่'].dt.date.unique(), reverse=True)
+            sel_date = st.selectbox("📅 เลือกวันที่:", dates, key="daily_date")
+        with c_dept:
+            sel_dept_day = st.selectbox("🏢 กรองตามฝ่าย/กลุ่มงาน:", dept_options, key="daily_dept")
+
+        df_day_all = master_df[master_df['วันที่'].dt.date == sel_date]
+        df_day = filter_by_dept(df_day_all, sel_dept_day)
+
         c_status = df_day['สถานะ'].value_counts().to_dict()
         col1, col2, col3, col4, col5 = st.columns(5)
-        col1.metric("👥 ทั้งหมด", len(df_day)); col2.metric("✅ ปกติ", c_status.get("ปกติ",0)); col3.metric("⚠️ สาย", c_status.get("สาย",0)); col4.metric("❌ ขาด", c_status.get("ขาดงาน",0)); col5.metric("🔔 ลืมสแกน", c_status.get("ลืมสแกนนิ้วเข้า",0)+c_status.get("ลืมสแกนนิ้วออก",0))
+        col1.metric("👥 ทั้งหมด", len(df_day))
+        col2.metric("✅ ปกติ", c_status.get("ปกติ", 0))
+        col3.metric("⚠️ สาย", c_status.get("สาย", 0))
+        col4.metric("❌ ขาด", c_status.get("ขาดงาน", 0))
+        col5.metric("🔔 ลืมสแกน", c_status.get("ลืมสแกนนิ้วเข้า", 0) + c_status.get("ลืมสแกนนิ้วออก", 0))
         st.markdown("---")
+
         c_chart, c_leader = st.columns(2)
         with c_chart:
             fig = px.pie(pd.DataFrame(list(c_status.items()), columns=['Status', 'Count']), values='Count', names='Status', hole=0.4, color='Status', color_discrete_map={"ปกติ": "#28a745", "สาย": "#ffc107", "ขาดงาน": "#dc3545", "ลืมสแกนนิ้วเข้า": "#fd7e14", "ลืมสแกนนิ้วออก": "#fd7e14", "วันหยุด": "#6c757d"})
             st.plotly_chart(fig, use_container_width=True)
         with c_leader:
-            st.subheader("🏆 มาเช้า 5 อันดับแรก")
+            leader_title = "🏆 มาเช้า 5 อันดับแรก" + (f" ({sel_dept_day})" if sel_dept_day != "ทั้งหมด" else "")
+            st.subheader(leader_title)
             df_early = df_day.dropna(subset=['เข้างาน']).sort_values('เข้างาน').head(5)
-            for i, r in enumerate(df_early.itertuples(), 1): st.markdown(f"**{'🥇' if i==1 else '🥈' if i==2 else '🥉' if i==3 else '🏃'} อันดับ {i}** | {r._2} — ⏰ **{r.เข้างาน}**")
+            if not df_early.empty:
+                for i, r in enumerate(df_early.itertuples(), 1):
+                    st.markdown(f"**{'🥇' if i==1 else '🥈' if i==2 else '🥉' if i==3 else '🏃'} อันดับ {i}** | {r._2} — ⏰ **{r.เข้างาน}**")
+            else:
+                st.info("ไม่มีข้อมูลเวลาเข้างานในกลุ่มที่เลือก")
+
         st.dataframe(style_status_table(df_day), use_container_width=True)
-        st.download_button("📥 ดาวน์โหลดรายงานวันนี้ (Excel)", daily_to_excel_bytes(df_day, sel_date), f"daily_{sel_date}.xlsx")
+        
+        dept_file_tag = f"_{sel_dept_day}" if sel_dept_day != "ทั้งหมด" else ""
+        btn_daily_label = "📥 ดาวน์โหลดรายงานวันนี้ (Excel)" + (f" - {sel_dept_day}" if sel_dept_day != "ทั้งหมด" else "")
+        st.download_button(btn_daily_label, daily_to_excel_bytes(df_day, sel_date, sel_dept_day), f"daily_{sel_date}{dept_file_tag}.xlsx")
 
     with tab3:
-        st.subheader("🏢 การมาสายแยกตามฝ่าย")
-        dept_stat = pd.crosstab(master_df['แผนก'], master_df['สถานะ']).fillna(0)
-        if 'สาย' in dept_stat.columns: st.plotly_chart(px.bar(dept_stat.reset_index(), x='แผนก', y='สาย', color='แผนก', text_auto=True), use_container_width=True)
-        
+        sel_dept_month = st.selectbox("🏢 กรองตามฝ่าย/กลุ่มงาน:", dept_options, key="month_dept")
+        df_month = filter_by_dept(master_df, sel_dept_month)
+
+        if sel_dept_month == "ทั้งหมด":
+            st.subheader("🏢 การมาสายแยกตามฝ่าย")
+            dept_stat = pd.crosstab(master_df['แผนก'].replace({'': 'ไม่ระบุฝ่าย'}), master_df['สถานะ']).fillna(0)
+            if 'สาย' in dept_stat.columns:
+                st.plotly_chart(px.bar(dept_stat.reset_index(), x='แผนก', y='สาย', color='แผนก', text_auto=True), use_container_width=True)
+        else:
+            st.subheader(f"🏢 สถิติการมาสายในกลุ่ม: {sel_dept_month}")
+            late_in_dept = df_month[df_month['สถานะ'] == 'สาย']['ชื่อ-สกุล'].value_counts().reset_index()
+            late_in_dept.columns = ['ชื่อ-สกุล', 'จำนวนครั้งที่สาย']
+            if not late_in_dept.empty:
+                st.plotly_chart(px.bar(late_in_dept.head(10), x='ชื่อ-สกุล', y='จำนวนครั้งที่สาย', color='จำนวนครั้งที่สาย', text_auto=True, color_continuous_scale="Reds"), use_container_width=True)
+            else:
+                st.info(f"✨ ยอดเยี่ยม! ไม่พบประวัติการมาสายในกลุ่ม {sel_dept_month}")
+
         # เพิ่มส่วนสรุปภาพรวมรายเดือน
-        st.markdown("### 📊 สรุปภาพรวมรายเดือน (ลืมสแกน/ขาดงาน)")
-        m_forget_in_count = master_df[master_df['สถานะ'] == 'ลืมสแกนนิ้วเข้า']['ชื่อ-สกุล'].nunique()
-        m_forget_out_count = master_df[master_df['สถานะ'] == 'ลืมสแกนนิ้วออก']['ชื่อ-สกุล'].nunique()
-        m_absent_count = master_df[master_df['สถานะ'] == 'ขาดงาน']['ชื่อ-สกุล'].nunique()
-        
+        monthly_summary_title = "### 📊 สรุปภาพรวมรายเดือน (ลืมสแกน/ขาดงาน)" + (f" - {sel_dept_month}" if sel_dept_month != "ทั้งหมด" else "")
+        st.markdown(monthly_summary_title)
+        m_forget_in_count = df_month[df_month['สถานะ'] == 'ลืมสแกนนิ้วเข้า']['ชื่อ-สกุล'].nunique()
+        m_forget_out_count = df_month[df_month['สถานะ'] == 'ลืมสแกนนิ้วออก']['ชื่อ-สกุล'].nunique()
+        m_absent_count = df_month[df_month['สถานะ'] == 'ขาดงาน']['ชื่อ-สกุล'].nunique()
+
         c_m1, c_m2, c_m3 = st.columns(3)
         c_m1.metric("👤 ลืมสแกนเข้า", f"{m_forget_in_count} คน")
         c_m2.metric("👤 ลืมสแกนออก", f"{m_forget_out_count} คน")
         c_m3.metric("👤 ขาดงาน", f"{m_absent_count} คน")
         st.markdown("---")
-        
-        master_df['day'] = master_df['วันที่'].dt.day
-        pivot = master_df.pivot_table(index="ชื่อ-สกุล", columns="day", values="สถานะ", aggfunc="first").fillna("")
+
+        df_month_p = df_month.copy()
+        df_month_p['day'] = df_month_p['วันที่'].dt.day
+        pivot = df_month_p.pivot_table(index="ชื่อ-สกุล", columns="day", values="สถานะ", aggfunc="first").fillna("")
         st.dataframe(style_status_table(pivot), use_container_width=True)
-        
+
+        dept_month_tag = f"_{sel_dept_month}" if sel_dept_month != "ทั้งหมด" else ""
         col_dl1, col_dl2 = st.columns(2)
         with col_dl1:
-            st.download_button("📥 ดาวน์โหลดสรุปรวม (Excel)", df_to_excel_bytes(pivot, master_df), "monthly_summary.xlsx", use_container_width=True)
+            dl_sum_label = "📥 ดาวน์โหลดสรุปรวม (Excel)" + (f" - {sel_dept_month}" if sel_dept_month != "ทั้งหมด" else "")
+            st.download_button(dl_sum_label, df_to_excel_bytes(pivot, df_month, sel_dept_month), f"monthly_summary{dept_month_tag}.xlsx", use_container_width=True)
         with col_dl2:
-            st.download_button("📥 ดาวน์โหลดรายงานลืมสแกน/ขาดงาน (Excel)", missing_scan_to_excel_bytes(master_df), "missing_scans_report.xlsx", use_container_width=True)
+            dl_missing_label = "📥 ดาวน์โหลดรายงานลืมสแกน/ขาดงาน (Excel)" + (f" - {sel_dept_month}" if sel_dept_month != "ทั้งหมด" else "")
+            st.download_button(dl_missing_label, missing_scan_to_excel_bytes(df_month, sel_dept_month), f"missing_scans_report{dept_month_tag}.xlsx", use_container_width=True)
 
     with tab4:
-        search_name = st.selectbox("🔍 ค้นหาชื่อพนักงาน:", ["-- เลือกชื่อ --"] + sorted(master_df['ชื่อ-สกุล'].unique()))
+        c_pdept, c_pname = st.columns([1, 2])
+        with c_pdept:
+            sel_dept_person = st.selectbox("🏢 กรองตามฝ่าย/กลุ่มงาน:", dept_options, key="person_dept")
+
+        df_person_pool = filter_by_dept(master_df, sel_dept_person)
+        available_names = sorted(df_person_pool['ชื่อ-สกุล'].unique())
+
+        with c_pname:
+            count_label = f" ({len(available_names)} คน)" if sel_dept_person != "ทั้งหมด" else ""
+            search_name = st.selectbox(f"🔍 ค้นหาชื่อพนักงาน{count_label}:", ["-- เลือกชื่อ --"] + available_names, key="person_name")
+
         if search_name != "-- เลือกชื่อ --":
             df_p = master_df[master_df['ชื่อ-สกุล'] == search_name].sort_values('วันที่')
+            emp_dept_list = df_p['แผนก'].dropna().unique()
+            emp_dept_str = emp_dept_list[0] if len(emp_dept_list) > 0 and emp_dept_list[0] else "ไม่ระบุฝ่าย"
+            st.markdown(f"**👤 ชื่อ-สกุล:** `{search_name}` &nbsp;&nbsp;|&nbsp;&nbsp; **🏢 ฝ่าย/กลุ่มงาน:** `{emp_dept_str}`")
+
             ps = df_p['สถานะ'].value_counts().to_dict()
-            score = max(100 - (ps.get('สาย',0)*2) - ((ps.get('ลืมสแกนนิ้วเข้า',0)+ps.get('ลืมสแกนนิ้วออก',0))*3) - (ps.get('ขาดงาน',0)*5), 0)
+            score = max(100 - (ps.get('สาย', 0) * 2) - ((ps.get('ลืมสแกนนิ้วเข้า', 0) + ps.get('ลืมสแกนนิ้วออก', 0)) * 3) - (ps.get('ขาดงาน', 0) * 5), 0)
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("⭐ คะแนน", f"{score}/100"); c2.metric("⚠️ สาย", ps.get('สาย',0)); c3.metric("❌ ขาด", ps.get('ขาดงาน',0)); c4.metric("🔔 ลืมสแกน", ps.get('ลืมสแกนนิ้วเข้า',0)+ps.get('ลืมสแกนนิ้วออก',0))
+            c1.metric("⭐ คะแนน", f"{score}/100")
+            c2.metric("⚠️ สาย", ps.get('สาย', 0))
+            c3.metric("❌ ขาด", ps.get('ขาดงาน', 0))
+            c4.metric("🔔 ลืมสแกน", ps.get('ลืมสแกนนิ้วเข้า', 0) + ps.get('ลืมสแกนนิ้วออก', 0))
             st.dataframe(style_status_table(df_p[['วันที่', 'เข้างาน', 'ออกงาน', 'สถานะ']]), use_container_width=True)
-else: st.info("👈 โปรดอัปโหลดไฟล์ PDF ในแท็บ 'นำเข้าข้อมูล' ก่อนครับ")
+else:
+    st.info("👈 โปรดอัปโหลดไฟล์ PDF ในแท็บ 'นำเข้าข้อมูล' ก่อนครับ")
