@@ -62,7 +62,8 @@ with st.sidebar:
 
 # เตรียมข้อมูลวันหยุดไทย (รองรับปีปัจจุบันและปีถัดไป)
 current_year = datetime.now().year
-th_holidays = holidays.Thailand(years=[current_year, current_year + 1])
+# ไม่ระบุ years -> ไลบรารีจะโหลดวันหยุดของปีที่ถูกค้นหาให้อัตโนมัติ (รองรับไฟล์ย้อนหลัง/ข้ามปี)
+th_holidays = holidays.Thailand()
 
 # -------------------------
 # ฟังก์ชันตรวจสอบวันหยุด
@@ -276,67 +277,182 @@ def missing_scan_to_excel_bytes(df_all: pd.DataFrame):
 # -------------------------
 # PDF Parsing
 # -------------------------
+DEPT_VARIANTS = ['ลูกจ้างชั่วคราว', 'ลูกจ้างประจำ', 'พนักงานราชการ', 'ข้าราชการ']
+# วันที่: รองรับ 1/10/2569, 01-10-2026, 1 / 10 / 2569, ปี 2 หลัก (69) และกรณีที่ปีติดกับเวลา เช่น 256908:12
+DATE_RE = re.compile(r'(?<!\d)(\d{1,2})\s*[\/\-]\s*(\d{1,2})\s*[\/\-]\s*(\d{4}|\d{2}(?!\d))')
+TIME_RE = re.compile(r'(?<!\d)(?:[01]?\d|2[0-3]):[0-5]\d(?!\d)')
+THAI_RE = re.compile(r'[\u0E01-\u0E2E]')
+TITLE_RE = re.compile(r'^(นาย|นาง|น\.ส\.|ว่าที่|ดร\.|จ\.ส\.|พ\.จ\.|ร\.ต\.|ร\.ท\.|ร\.อ\.|น\.ต\.|น\.ท\.|น\.อ\.|พ\.ต\.|พ\.ท\.|พ\.อ\.|ด\.ต\.|ส\.ต\.|ส\.อ\.|จ\.ต\.|จ\.ท\.|จ\.อ\.)')
+# คำในบรรทัดหัวตาราง/หัวกระดาษ (ใช้กับบรรทัดที่ "ไม่มีวันที่" เท่านั้น)
+HEADER_RE = re.compile(r'ชื่อ\s*-?\s*สกุล|เข้างาน|ออกงาน|รายงาน|หน้า\s*\d|พิมพ์เมื่อ|วันที่พิมพ์')
+# คำสถานะที่อาจติดมาท้ายแถว (ต้องตัดออกก่อนนำไปเป็นชื่อคนถัดไป)
+# ตัดเฉพาะคำที่อยู่ "ต้น" ข้อความ เพื่อไม่ให้ไปตัดชื่อคน เช่น "สายใจ", "ลาวัลย์"
+STATUS_PREFIX_RE = re.compile(r'^\s*(?:(?:ปกติ|มาสาย|สาย|ขาดงาน|ขาด|วันหยุด|ลืมสแกน\S*|ลาป่วย|ลากิจ|ลาพักผ่อน|-)\s+)+')
+
+
+def _to_date(m):
+    d, mth, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    if y < 100:                       # ปี 2 หลัก: >= 40 ถือเป็น พ.ศ. (25xx) ไม่งั้นเป็น ค.ศ. (20xx)
+        y = 2500 + y if y >= 40 else 2000 + y
+    if y > 2400:
+        y -= 543
+    return pd.Timestamp(year=y, month=mth, day=d)
+
+
+def _split_dept(text):
+    text = text.strip()
+    for dv in DEPT_VARIANTS:
+        if text.startswith(dv):
+            return dv, text[len(dv):].strip()
+    return "", text
+
+
+def _classify_times(times):
+    check_in, check_out = None, None
+    if len(times) >= 3:
+        check_in, check_out = times[0], times[1]
+    elif len(times) == 2:
+        h1 = int(times[0].split(':')[0])
+        if times[1] == "01:00":
+            if h1 >= 12: check_out, check_in = times[0], None
+            else: check_in, check_out = times[0], None
+        else: check_in, check_out = times[0], times[1]
+    elif len(times) == 1:
+        if int(times[0].split(':')[0]) >= 12: check_out = times[0]
+        else: check_in = times[0]
+    return check_in, check_out
+
+
+def _get_status(dt_obj, check_in, check_out, late_threshold, exc_week, exc_th, extra_list):
+    if not check_in and not check_out:
+        return "วันหยุด" if is_it_holiday(dt_obj, exc_week, exc_th, extra_list) else "ขาดงาน"
+    if not check_in:
+        return "ลืมสแกนนิ้วเข้า"
+    if not check_out:
+        return "ลืมสแกนนิ้วออก"
+    try:
+        hh, mm = map(int, check_in.split(':'))
+        return "สาย" if (hh * 60 + mm) >= late_threshold else "ปกติ"
+    except Exception:
+        return "ปกติ"
+
+
+def parse_lines(lines, late_threshold, exc_week, exc_th, extra_list, source=""):
+    """แปลงบรรทัดข้อความจาก PDF เป็น records
+
+    คืนค่า (records, skipped) โดย skipped คือบรรทัดที่อ่านไม่ได้ เพื่อแสดงให้ผู้ใช้ตรวจสอบ
+    """
+    records, skipped = [], []
+    current_dept, current_name = "", ""
+    pending = []          # บรรทัดข้อความ (ไม่มีวันที่) ที่อาจเป็นชื่อ/ส่วนหนึ่งของชื่อ
+
+    for raw in lines:
+        ln = normalize_whitespace(raw)
+        if not ln:
+            continue
+        matches = list(DATE_RE.finditer(ln))
+
+        # ---------- บรรทัดที่ไม่มีวันที่ ----------
+        if not matches:
+            if HEADER_RE.search(ln):
+                pending = []
+                continue
+            dept_only, rest = _split_dept(ln)
+            if dept_only and not rest:          # บรรทัดหัวกลุ่ม เช่น "ข้าราชการ"
+                current_dept = dept_only
+                pending = []
+                continue
+            if THAI_RE.search(ln) and not TIME_RE.search(ln):
+                pending.append(ln)
+            elif TIME_RE.search(ln):
+                skipped.append(f"{source}: {raw}")
+            continue
+
+        # ---------- บรรทัดที่มีวันที่ (อาจมีหลายรายการถ้า PDF รวมแถวติดกัน) ----------
+        carry_left = ln[:matches[0].start()]
+        for i, m in enumerate(matches):
+            seg_end = matches[i + 1].start() if i + 1 < len(matches) else len(ln)
+            seg = ln[m.end():seg_end]
+            time_matches = list(TIME_RE.finditer(seg))
+            times = [t.group(0) for t in time_matches]
+
+            # ข้อความหลังเวลาตัวสุดท้าย อาจเป็นชื่อของรายการถัดไป
+            tail = seg[time_matches[-1].end():] if time_matches else seg
+            next_left = STATUS_PREFIX_RE.sub('', tail + ' ').strip() if i + 1 < len(matches) else ""
+
+            left = re.sub(r'^\d+[\.\s]+', '', carry_left.strip()).strip()   # ตัดเลขลำดับหน้าแถว
+            carry_left = next_left
+
+            dept, name = _split_dept(left)
+            name = normalize_whitespace(name)
+
+            # ชื่อถูกตัดขึ้นบรรทัดก่อนหน้า เช่น "นางสาวสมหญิง" / "ใจดี 01/10/2569 ..."
+            if pending:
+                pend_dept, pend_name = _split_dept(" ".join(pending))
+                if not name:
+                    # บรรทัดที่ไม่มีคำนำหน้าชื่อ อาจเป็นนามสกุลที่ล้นมาจากแถวก่อน -> ใช้ชื่อเดิม
+                    name = pend_name if (TITLE_RE.match(pend_name) or not current_name) else current_name
+                elif TITLE_RE.match(pend_name) and not TITLE_RE.match(name):
+                    name = f"{pend_name} {name}".strip()
+                dept = dept or pend_dept
+                pending = []
+
+            # ไม่มีชื่อในแถว -> ใช้ชื่อล่าสุด (รายงานแบบพิมพ์ชื่อครั้งเดียวต่อคน)
+            if not name:
+                name = current_name
+                dept = dept or current_dept
+            dept = dept or current_dept
+
+            if not name:
+                skipped.append(f"{source}: (ไม่พบชื่อ) {raw}")
+                continue
+
+            try:
+                dt_obj = _to_date(m)
+            except Exception:
+                skipped.append(f"{source}: (วันที่ผิดรูปแบบ) {raw}")
+                continue
+
+            current_name, current_dept = name, dept
+            check_in, check_out = _classify_times(times)
+            status = _get_status(dt_obj, check_in, check_out, late_threshold, exc_week, exc_th, extra_list)
+            records.append({'แผนก': dept, 'ชื่อ-สกุล': name, 'วันที่': dt_obj,
+                            'เข้างาน': check_in, 'ออกงาน': check_out, 'สถานะ': status})
+    return records, skipped
+
+
 def process_pdf(file, late_threshold, exc_week, exc_th, extra_list):
-    data = []
-    dept_variants = ['ข้าราชการ','พนักงานราชการ','ลูกจ้างชั่วคราว','ลูกจ้างประจำ']
+    """คืนค่า (DataFrame หรือ None, รายการบรรทัดที่ข้าม)"""
+    fname = getattr(file, 'name', str(file))
+    all_records, all_skipped = [], []
     try:
         with pdfplumber.open(file) as pdf:
             for pageno, page in enumerate(pdf.pages, start=1):
-                # ใช้ x_tolerance และ y_tolerance เพื่อช่วยรวมสระ/วรรณยุกต์ไทยไม่ให้แตกกระจาย
-                text = page.extract_text(x_tolerance=3, y_tolerance=3)
-                if not text: continue
+                # y_tolerance ต่ำลงเพื่อไม่ให้แถวที่อยู่ชิดกันถูกรวมเป็นบรรทัดเดียว
+                text = page.extract_text(x_tolerance=2, y_tolerance=2)
+                if not text:
+                    all_skipped.append(f"{fname} หน้า {pageno}: ไม่พบข้อความ (อาจเป็น PDF แบบสแกนภาพ)")
+                    continue
                 lines = [ln.strip() for ln in text.split('\n') if ln.strip()]
-                for line in lines:
-                    if re.search(r'แผนก|ชื่อ-สกุล|เข้างาน|ออกงาน|วันที่|สาย|ขาดงาน', line): continue
-                    line_norm = normalize_whitespace(line)
-                    date_match = re.search(r'(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})', line_norm)
-                    if not date_match: continue
-                    
-                    date_str = date_match.group(1).replace('-', '/')
-                    d_parts = date_str.split('/')
-                    if len(d_parts) == 3:
-                        year = int(d_parts[2])
-                        if year > 2400: year -= 543
-                        date_str = f"{d_parts[0]}/{d_parts[1]}/{year}"
-                    
-                    dt_obj = pd.to_datetime(date_str, format="%d/%m/%Y")
-                    left = line_norm[:date_match.start()].strip()
-                    right = line_norm[date_match.end():].strip()
-                    times = re.findall(r'\d{1,2}:\d{2}', right)
-                    
-                    check_in, check_out = None, None
-                    if len(times) >= 3:
-                        check_in, check_out = times[0], times[1]
-                    elif len(times) == 2:
-                        h1 = int(times[0].split(':')[0])
-                        if times[1] == "01:00":
-                            if h1 >= 12: check_out, check_in = times[0], None
-                            else: check_in, check_out = times[0], None
-                        else: check_in, check_out = times[0], times[1]
-                    elif len(times) == 1:
-                        if int(times[0].split(':')[0]) >= 12: check_out = times[0]
-                        else: check_in = times[0]
-
-                    if not check_in and not check_out:
-                        if is_it_holiday(dt_obj, exc_week, exc_th, extra_list): status = "วันหยุด"
-                        else: status = "ขาดงาน"
-                    elif not check_in and check_out: status = "ลืมสแกนนิ้วเข้า"
-                    elif check_in and not check_out: status = "ลืมสแกนนิ้วออก"
-                    else:
-                        try:
-                            hh, mm = map(int, check_in.split(':'))
-                            status = "สาย" if (hh * 60 + mm) >= late_threshold else "ปกติ"
-                        except: status = "ปกติ"
-
-                    dept, name = "", left
-                    for dv in dept_variants:
-                        if left.startswith(dv):
-                            dept, name = dv, left[len(dv):].strip(); break
-
-                    data.append({'แผนก': dept, 'ชื่อ-สกุล': name, 'วันที่': dt_obj, 'เข้างาน': check_in, 'ออกงาน': check_out, 'สถานะ': status})
-        return pd.DataFrame(data) if data else None
+                recs, skipped = parse_lines(lines, late_threshold, exc_week, exc_th, extra_list,
+                                            source=f"{fname} หน้า {pageno}")
+                all_records.extend(recs)
+                all_skipped.extend(skipped)
     except Exception as e:
-        st.error(f"Error: {e}"); return None
+        st.error(f"อ่านไฟล์ {fname} ไม่สำเร็จ: {e}")
+    return (pd.DataFrame(all_records) if all_records else None), all_skipped
+
+
+def unify_names(df: pd.DataFrame) -> pd.DataFrame:
+    """รวมชื่อที่ต่างกันแค่ช่องว่าง (เช่น 'นาย สมชาย' กับ 'นายสมชาย') ให้เป็นชื่อเดียวกัน"""
+    key = df['ชื่อ-สกุล'].str.replace(r'\s+', '', regex=True)
+    canonical = df.groupby(key)['ชื่อ-สกุล'].agg(lambda s: s.value_counts().index[0])
+    df = df.copy()
+    df['ชื่อ-สกุล'] = key.map(canonical)
+    # เติมแผนกที่ว่างจากแถวอื่นของคนเดียวกัน
+    dept_map = df[df['แผนก'] != ''].groupby('ชื่อ-สกุล')['แผนก'].agg(lambda s: s.value_counts().index[0])
+    df['แผนก'] = df.apply(lambda r: r['แผนก'] or dept_map.get(r['ชื่อ-สกุล'], ''), axis=1)
+    return df
 
 # -------------------------
 # Styling DataFrame
@@ -359,15 +475,21 @@ with tab1:
     st.header("📤 นำเข้าข้อมูล")
     uploaded_files = st.file_uploader("ลากไฟล์ PDF มาวางตรงนี้", type="pdf", accept_multiple_files=True)
     if uploaded_files and st.button("🚀 ประมวลผลข้อมูล", type="primary"):
-        all_data = []
+        all_data, all_skipped = [], []
         for f in uploaded_files:
-            df = process_pdf(f, LATE_THRESHOLD_MINUTES, exclude_weekends, exclude_th_holidays, extra_holidays)
-            if df is not None: all_data.append(df)
+            df, skipped = process_pdf(f, LATE_THRESHOLD_MINUTES, exclude_weekends, exclude_th_holidays, extra_holidays)
+            all_skipped.extend(skipped)
+            if df is not None:
+                all_data.append(df)
+                st.write(f"📄 {f.name}: พบ {len(df)} รายการ / {df['ชื่อ-สกุล'].nunique()} คน")
         if all_data:
-            master_df = pd.concat(all_data, ignore_index=True).drop_duplicates(subset=['ชื่อ-สกุล', 'วันที่'], keep='last')
+            master_df = unify_names(pd.concat(all_data, ignore_index=True)).drop_duplicates(subset=['ชื่อ-สกุล', 'วันที่'], keep='last')
             st.session_state.master_df = master_df
-            st.success("✅ ประมวลผลสำเร็จ!")
+            st.success(f"✅ ประมวลผลสำเร็จ! รวม {master_df['ชื่อ-สกุล'].nunique()} คน")
         else: st.error("❌ ไม่พบข้อมูล")
+        if all_skipped:
+            with st.expander(f"⚠️ บรรทัดที่อ่านไม่ได้ {len(all_skipped)} บรรทัด (กดเพื่อตรวจสอบ)"):
+                st.text("\n".join(all_skipped))
 
 if 'master_df' in st.session_state:
     master_df = st.session_state.master_df
