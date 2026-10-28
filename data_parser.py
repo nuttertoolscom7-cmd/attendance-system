@@ -100,14 +100,14 @@ def parse_official_report_data(rows_data, header_meta=None):
         for code, span in brackets:
             l_type = TYPE_CODE_MAP.get(code, f'ลา{code}')
             is_half = False
-            if '0.5' in remarks or 'ครึ่ง' in remarks:
-                if l_type == 'ลาป่วย' and sick_days == 0.5:
+            if '0.5' in remarks or 'ครึ่ง' in remarks or '.5' in remarks:
+                if l_type == 'ลาป่วย' and (sick_days % 1 != 0):
                     is_half = True
-                elif l_type == 'ลากิจ' and bus_days == 0.5:
+                elif l_type == 'ลากิจ' and (bus_days % 1 != 0):
                     is_half = True
-                elif l_type == 'ลาพักผ่อน' and vac_days == 0.5:
+                elif l_type == 'ลาพักผ่อน' and (vac_days % 1 != 0):
                     is_half = True
-                elif '0.5 วัน' in remarks and len(brackets) == 1:
+                elif ('0.5 วัน' in remarks or '.5 วัน' in remarks) and len(brackets) == 1:
                     is_half = True
 
             span = span.strip()

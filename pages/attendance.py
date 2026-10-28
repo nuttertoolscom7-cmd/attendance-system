@@ -485,7 +485,7 @@ def style_monthly_report_table(report_df: pd.DataFrame, holiday_days: set):
             elif is_hol_col:
                 if v == "✓":
                     styles.append("background-color: #95B3D7; color: #006100; font-weight: 700; text-align: center;")
-                elif v in ["สาย", "เข้า", "ออก", "x"]:
+                elif v in ["สาย", "เข้า", "ออก", "x", "ขาด(บ)", "ขาด(ช)"]:
                     styles.append("background-color: #95B3D7; color: #9C0006; font-weight: 700; text-align: center;")
                 else:
                     styles.append("background-color: #95B3D7; color: #1F3864; text-align: center;")
@@ -496,7 +496,7 @@ def style_monthly_report_table(report_df: pd.DataFrame, holiday_days: set):
                     styles.append("background-color: #FFEB9C; color: #9C6500; font-weight: 700; text-align: center;")
                 elif v in ["เข้า", "ออก"]:
                     styles.append("background-color: #FCE4D6; color: #C65911; font-weight: 700; text-align: center;")
-                elif v == "x":
+                elif v in ["x", "ขาด(บ)", "ขาด(ช)"]:
                     styles.append("background-color: #FFC7CE; color: #9C0006; font-weight: 700; text-align: center;")
                 elif v == "-":
                     styles.append("background-color: #95B3D7; color: #1F3864; text-align: center;")
@@ -631,7 +631,7 @@ def missing_scan_to_excel_bytes(df_all: pd.DataFrame, dept_label: str = ""):
     output = BytesIO()
     
     # 1. Prepare data
-    missing_statuses = ['ลืมสแกนนิ้วเข้า', 'ลืมสแกนนิ้วออก', 'ขาดงาน']
+    missing_statuses = ['ลืมสแกนนิ้วเข้า', 'ลืมสแกนนิ้วออก', 'ขาดงาน', 'ขาดงานครึ่งบ่าย', 'ขาดงานครึ่งเช้า']
     df_missing = df_all[df_all['สถานะ'].isin(missing_statuses)].copy()
     if 'มีใบลา' in df_missing.columns:
         df_missing = df_missing[df_missing['มีใบลา'] != True]
@@ -648,6 +648,8 @@ def missing_scan_to_excel_bytes(df_all: pd.DataFrame, dept_label: str = ""):
         if status == 'ลืมสแกนนิ้วเข้า': suffix = "(เวลาเข้า)"
         elif status == 'ลืมสแกนนิ้วออก': suffix = "(เวลาออก)"
         elif status == 'ขาดงาน': suffix = "(เข้าและออก)"
+        elif status == 'ขาดงานครึ่งบ่าย': suffix = f"(ขาดงานครึ่งบ่าย ออก {row['ออกงาน']})" if pd.notna(row.get('ออกงาน')) and row.get('ออกงาน') else "(ขาดงานครึ่งบ่าย)"
+        elif status == 'ขาดงานครึ่งเช้า': suffix = f"(ขาดงานครึ่งเช้า เข้า {row['เข้างาน']})" if pd.notna(row.get('เข้างาน')) and row.get('เข้างาน') else "(ขาดงานครึ่งเช้า)"
         
         month_name = month_name_thai(d.month)
         year_be = d.year + 543
@@ -773,8 +775,17 @@ def _get_status(dt_obj, check_in, check_out, late_threshold, exc_week, exc_th, e
     if not check_out:
         return "ลืมสแกนนิ้วออก"
     try:
-        hh, mm = map(int, check_in.split(':'))
-        return "สาย" if (hh * 60 + mm) >= late_threshold else "ปกติ"
+        in_h, in_m = map(int, check_in.split(':'))
+        out_h, out_m = map(int, check_out.split(':'))
+        in_mins = in_h * 60 + in_m
+        out_mins = out_h * 60 + out_m
+        # สแกนออกช่วงเที่ยงหรือบ่ายก่อนเวลาเลิกงาน (ก่อน 15:30 น.) ถือว่าขาดงานครึ่งบ่าย
+        if out_mins < 15 * 60 + 30:
+            return "ขาดงานครึ่งบ่าย"
+        # สแกนเข้าช่วงเที่ยง (11:30 - 14:00 น.) และสแกนออกช่วงเย็นตามปกติ ถือว่าขาดงานครึ่งเช้า
+        if 11 * 60 + 30 <= in_mins <= 14 * 60:
+            return "ขาดงานครึ่งเช้า"
+        return "สาย" if in_mins >= late_threshold else "ปกติ"
     except Exception:
         return "ปกติ"
 
@@ -1165,6 +1176,10 @@ def shorten_status_for_pivot(val):
         return "เข้า"
     if v in ["ลืมสแกนนิ้วออก", "ลืมออก", "ออก"]:
         return "ออก"
+    if v in ["ขาดงานครึ่งบ่าย", "ขาด(บ)"]:
+        return "ขาด(บ)"
+    if v in ["ขาดงานครึ่งเช้า", "ขาด(ช)"]:
+        return "ขาด(ช)"
     if v in ["ขาดงาน", "ขาด", "x", "X"]:
         return "x"
     if v in ["วันหยุด", "หยุด", "-", " -"]:
@@ -1228,9 +1243,9 @@ def cross_check_attendance_with_leave(attendance_df: pd.DataFrame, leave_df: pd.
             leave_remark_col.append(remark)
             
             half_tag = "ครึ่งวัน"
-            if "บ่าย" in remark or "(บ)" in remark or (cur_status == 'ลืมสแกนนิ้วออก' and is_half):
+            if "บ่าย" in remark or "(บ)" in remark or cur_status == 'ขาดงานครึ่งบ่าย' or (cur_status == 'ลืมสแกนนิ้วออก' and is_half):
                 half_tag = "ครึ่งบ่าย"
-            elif "เช้า" in remark or "(ช)" in remark or (cur_status == 'ลืมสแกนนิ้วเข้า' and is_half):
+            elif "เช้า" in remark or "(ช)" in remark or cur_status == 'ขาดงานครึ่งเช้า' or (cur_status == 'ลืมสแกนนิ้วเข้า' and is_half):
                 half_tag = "ครึ่งเช้า"
 
             if cur_status == 'ขาดงาน':
@@ -1238,6 +1253,11 @@ def cross_check_attendance_with_leave(attendance_df: pd.DataFrame, leave_df: pd.
                     updated_status_col.append(f"{l_type} ({half_tag})")
                 else:
                     updated_status_col.append(f"{l_type} (มีใบลา)")
+            elif cur_status in ['ขาดงานครึ่งบ่าย', 'ขาดงานครึ่งเช้า']:
+                if l_type == 'สาย':
+                    updated_status_col.append('สาย (มีใบขออนุญาต)')
+                else:
+                    updated_status_col.append(f"{l_type} ({half_tag})")
             elif cur_status in ['ลืมสแกนนิ้วเข้า', 'ลืมสแกนนิ้วออก']:
                 if l_type == 'สาย':
                     updated_status_col.append('สาย (มีใบขออนุญาต)')
@@ -1303,7 +1323,7 @@ def cross_check_to_excel_bytes(df_all: pd.DataFrame, dept_label: str = ""):
         ws_leave.set_column('G:G', 25)
         
         # 2. Unauthorized Absent Sheet
-        absent_df = df_all[df_all['สถานะ'] == 'ขาดงาน'].copy()
+        absent_df = df_all[df_all['สถานะ'].isin(['ขาดงาน', 'ขาดงานครึ่งบ่าย', 'ขาดงานครึ่งเช้า'])].copy()
         ws_abs = workbook.add_worksheet('ขาดงานจริง_ไม่มีใบลา')
         ws_abs.merge_range('A1:E1', f'รายงานรายชื่อผู้ขาดงานจริง (ไม่มีใบลา){sub_dept}', title_format)
         headers_a = ['ลำดับ', 'วันที่', 'แผนก', 'ชื่อ - สกุล', 'สถานะ']
@@ -1454,10 +1474,10 @@ if 'master_df' in st.session_state:
         df_day = filter_by_dept(df_day_all, sel_dept_day)
 
         c_status = df_day['สถานะ'].value_counts().to_dict()
-        leave_cnt = sum(c for s, c in c_status.items() if 'ลา' in s or 'มีใบลา' in s or 'ครึ่งวัน' in s)
+        leave_cnt = sum(c for s, c in c_status.items() if ('ลา' in s or 'มีใบลา' in s or 'ครึ่ง' in s) and not s.startswith('ขาดงาน'))
         late_cnt = c_status.get("สาย", 0) + c_status.get("สาย (มีใบขออนุญาต)", 0)
         forget_cnt = c_status.get("ลืมสแกนนิ้วเข้า", 0) + c_status.get("ลืมสแกนนิ้วออก", 0)
-        absent_cnt = c_status.get("ขาดงาน", 0)
+        absent_cnt = sum(c for s, c in c_status.items() if s.startswith("ขาดงาน"))
 
         col1, col2, col3, col4, col5, col6 = st.columns(6)
         col1.metric("👥 ทั้งหมด", len(df_day))
@@ -1476,6 +1496,8 @@ if 'master_df' in st.session_state:
                 "สาย": "#ffc107",
                 "สาย (มีใบขออนุญาต)": "#ffe082",
                 "ขาดงาน": "#dc3545",
+                "ขาดงานครึ่งบ่าย": "#e35d6a",
+                "ขาดงานครึ่งเช้า": "#ea868f",
                 "ลืมสแกนนิ้วเข้า": "#fd7e14",
                 "ลืมสแกนนิ้วออก": "#e65100",
                 "ลาป่วย (มีใบลา)": "#17a2b8",
@@ -1532,7 +1554,7 @@ if 'master_df' in st.session_state:
         st.markdown(monthly_summary_title)
         m_forget_in_count = df_month[df_month['สถานะ'] == 'ลืมสแกนนิ้วเข้า']['ชื่อ-สกุล'].nunique()
         m_forget_out_count = df_month[df_month['สถานะ'] == 'ลืมสแกนนิ้วออก']['ชื่อ-สกุล'].nunique()
-        m_absent_count = df_month[df_month['สถานะ'] == 'ขาดงาน']['ชื่อ-สกุล'].nunique()
+        m_absent_count = df_month[df_month['สถานะ'].isin(['ขาดงาน', 'ขาดงานครึ่งบ่าย', 'ขาดงานครึ่งเช้า'])]['ชื่อ-สกุล'].nunique()
         m_leave_count = df_month[df_month['มีใบลา'] == True]['ชื่อ-สกุล'].nunique() if 'มีใบลา' in df_month.columns else 0
 
         c_m1, c_m2, c_m3, c_m4 = st.columns(4)
@@ -1554,7 +1576,7 @@ if 'master_df' in st.session_state:
             '<span style="background:#FFEB9C; color:#9C6500; padding:1px 8px; border-radius:6px; font-weight:600;">สาย = มาสาย</span> | '
             '<span style="background:#FCE4D6; color:#C65911; padding:1px 8px; border-radius:6px; font-weight:600;">เข้า = ลืมสแกนเข้า</span> | '
             '<span style="background:#FCE4D6; color:#C65911; padding:1px 8px; border-radius:6px; font-weight:600;">ออก = ลืมสแกนออก</span> | '
-            '<span style="background:#FFC7CE; color:#9C0006; padding:1px 8px; border-radius:6px; font-weight:600;">x = ขาดงาน (เข้า-ออก)</span> | '
+            '<span style="background:#FFC7CE; color:#9C0006; padding:1px 8px; border-radius:6px; font-weight:600;">x / ขาด(บ) / ขาด(ช) = ขาดงาน / ขาดครึ่งบ่าย / ขาดครึ่งเช้า</span> | '
             '<span style="background:#95B3D7; color:#1F3864; padding:1px 8px; border-radius:6px; font-weight:600;">- = วันหยุดราชการ</span> | '
             '<span style="background:#D1ECF1; color:#0C5460; padding:1px 8px; border-radius:6px; font-weight:600;">ป / พ / ก = ลาป่วย / พักผ่อน / ลากิจ</span>'
             '</div>',
@@ -1613,8 +1635,8 @@ if 'master_df' in st.session_state:
             unexcused_late = ps.get('สาย', 0)
             missed_in = ps.get('ลืมสแกนนิ้วเข้า', 0)
             missed_out = ps.get('ลืมสแกนนิ้วออก', 0)
-            unauth_absent = ps.get('ขาดงาน', 0)
-            leave_p_count = sum(cnt for stat, cnt in ps.items() if 'ลา' in stat or 'ครึ่งวัน' in stat)
+            unauth_absent = sum(cnt for stat, cnt in ps.items() if stat.startswith('ขาดงาน'))
+            leave_p_count = sum(cnt for stat, cnt in ps.items() if ('ลา' in stat or 'ครึ่ง' in stat) and not stat.startswith('ขาดงาน'))
 
             score = max(100 - (unexcused_late * 2) - ((missed_in + missed_out) * 3) - (unauth_absent * 5), 0)
             if score >= 90:
@@ -1649,7 +1671,7 @@ if 'master_df' in st.session_state:
 
         total_records = len(df_cross)
         leave_records = df_cross[df_cross['มีใบลา'] == True] if 'มีใบลา' in df_cross.columns else pd.DataFrame()
-        absent_records = df_cross[df_cross['สถานะ'] == 'ขาดงาน']
+        absent_records = df_cross[df_cross['สถานะ'].isin(['ขาดงาน', 'ขาดงานครึ่งบ่าย', 'ขาดงานครึ่งเช้า'])]
         forget_records = df_cross[df_cross['สถานะ'].isin(['ลืมสแกนนิ้วเข้า', 'ลืมสแกนนิ้วออก'])]
 
         if len(absent_records) == 0:
