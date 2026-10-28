@@ -1388,7 +1388,7 @@ with tab1:
         uploaded_files = st.file_uploader("ลากไฟล์ PDF สแกนนิ้วมาวางตรงนี้", type="pdf", accept_multiple_files=True)
     with col_u2:
         st.subheader("2. 📊 ตารางวันลา (Excel)")
-        uploaded_leave = st.file_uploader("อัปโหลดไฟล์ตารางวันลา Excel เพื่อตรวจเทียบอัตโนมัติ (.xlsx)", type=["xlsx"], key="attendance_leave_uploader")
+        uploaded_leave = st.file_uploader("อัปโหลดไฟล์ตารางวันลา เพื่อตรวจเทียบอัตโนมัติ (.xlsx, .csv)", type=["xlsx", "csv"], key="attendance_leave_uploader")
         if uploaded_leave is not None:
             try:
                 leave_df_parsed = load_data(uploaded_leave)

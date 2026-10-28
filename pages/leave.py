@@ -1,10 +1,18 @@
 import streamlit as st
 import pandas as pd
-from data_parser import load_data
 import plotly.express as px
 import io
 import openpyxl
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+import re
+import json
+import os
+from data_parser import (
+    load_data,
+    generate_official_leave_excel,
+    synthesize_official_summary,
+    parse_official_report_data
+)
 
 # Page configuration
 
@@ -80,6 +88,48 @@ st.markdown("""
         font-size: 0.98rem;
         color: #6E655E;
         margin: 0;
+    }
+
+    /* Official Report Header Box */
+    .official-report-card {
+        background: #FFFFFF;
+        border: 2px solid #EAD8C7;
+        border-radius: 20px;
+        padding: 22px 26px;
+        margin-bottom: 20px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.04);
+        text-align: center;
+    }
+    .official-org-title {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: #1A365D;
+        margin-bottom: 4px;
+    }
+    .official-main-title {
+        font-size: 1.25rem;
+        font-weight: 600;
+        color: #2B6CB0;
+        margin-bottom: 4px;
+    }
+    .official-date-badge {
+        display: inline-block;
+        background: #EBF8FF;
+        color: #2B6CB0;
+        border: 1px solid #BEE3F8;
+        padding: 4px 16px;
+        border-radius: 9999px;
+        font-weight: 600;
+        font-size: 0.92rem;
+        margin: 6px 0 10px 0;
+    }
+    .official-format-sub {
+        font-size: 0.88rem;
+        color: #718096;
+        text-align: left;
+        border-top: 1px dashed #E2E8F0;
+        padding-top: 8px;
+        margin-top: 6px;
     }
 
     /* Tabs */
@@ -177,23 +227,37 @@ st.markdown("""
 # --- Header Section ---
 st.markdown("""
 <div class="leave-header-container">
-    <div class="leave-pill-badge">🏖️ LEAVE TRACKER & ANALYTICS</div>
-    <div class="leave-header-title">ระบบตรวจสอบข้อมูลการลาบุคลากร</div>
-    <p class="leave-header-sub">วิเคราะห์และสรุปผลข้อมูลการลาประจำปี (ป่วย, กิจ, พักผ่อน, สาย) ศูนย์ฝึกพาณิชย์นาวี</p>
+    <div class="leave-pill-badge">🏖️ LEAVE TRACKER & OFFICIAL REPORTS</div>
+    <div class="leave-header-title">ระบบตรวจสอบและรายงานข้อมูลการลาบุคลากร</div>
+    <p class="leave-header-sub">รองรับทั้งแบบฟอร์มรายงานทางการกรมเจ้าท่า (13 คอลัมน์) และการวิเคราะห์สถิติวันลาประจำปี</p>
 </div>
 """, unsafe_allow_html=True)
 
 # --- File Uploader ---
 st.sidebar.markdown("### 📂 นำเข้าข้อมูล")
-uploaded_file = st.sidebar.file_uploader("อัปโหลดไฟล์ Excel (.xlsx)", type=["xlsx"], help="รองรับไฟล์รูปแบบตารางวันลา")
+uploaded_file = st.sidebar.file_uploader(
+    "อัปโหลดไฟล์ตารางวันลา (.xlsx, .csv)", 
+    type=["xlsx", "csv"], 
+    help="รองรับรายงานทางการกรมเจ้าท่า (เช่น ข้าราชการ.xlsx / .csv) และตารางวันลาประจำปี (.xlsx)"
+)
 
 @st.cache_data(show_spinner=False)
 def get_data(file_source, _force_refresh=1):
     return load_data(file_source)
 
+# Load canonical roster if available for name ordering and synthesis
+roster_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "canonical_personnel.json")
+CANONICAL_ROSTER = []
+if os.path.exists(roster_path):
+    try:
+        with open(roster_path, 'r', encoding='utf-8') as rf:
+            CANONICAL_ROSTER = json.load(rf)
+    except Exception:
+        pass
+
 if uploaded_file is not None:
     with st.spinner('กำลังประมวลผลข้อมูล...'):
-        df = get_data(uploaded_file, _force_refresh=2)
+        df = get_data(uploaded_file, _force_refresh=4)
         if df is not None and not df.empty:
             st.session_state.leave_df = df
 elif 'leave_df' in st.session_state and st.session_state.leave_df is not None:
@@ -206,79 +270,246 @@ if df is not None:
     if df.empty:
         st.error("❌ ไม่พบข้อมูลการลาในไฟล์ที่อัปโหลด หรือรูปแบบไฟล์ไม่ถูกต้อง")
     else:
+        # Determine if official summary table exists on dataframe or synthesize it
+        official_summary_df = df.attrs.get('official_summary')
+        header_meta = df.attrs.get('header_meta') or {
+            'org': 'กรมเจ้าท่า',
+            'title': 'รายงานการมาปฏิบัติราชการของข้าราชการพลเรือนสามัญ',
+            'date_range': 'ประจำเดือนปัจจุบัน',
+            'format': 'รูปแบบการออกรายงาน : โครงสร้างตามกฎหมาย - ทั้งส่วนราชการ - กรมเจ้าท่า - กระทรวงคมนาคม'
+        }
+
+        # If not loaded from official report, synthesize official summary from details
+        if official_summary_df is None or official_summary_df.empty:
+            avail_months = df['Month'].dropna().unique().tolist() if 'Month' in df.columns else []
+            sel_month = avail_months[0] if avail_months else 'ตุลาคม'
+            official_summary_df = synthesize_official_summary(df, roster=CANONICAL_ROSTER, month_name=sel_month)
+
         # --- Sidebar Filters ---
         st.sidebar.markdown("---")
         st.sidebar.markdown("### 🎯 ตัวกรองข้อมูล")
         
-        budget_year = st.sidebar.multiselect(
-            "📆 ปีงบประมาณ",
-            options=sorted(df['BudgetYear'].unique()),
-            default=df['BudgetYear'].unique()
-        )
+        b_years = sorted(df['BudgetYear'].dropna().unique()) if 'BudgetYear' in df.columns else ['2569']
+        budget_year = st.sidebar.multiselect("📆 ปีงบประมาณ", options=b_years, default=b_years)
         
-        months = st.sidebar.multiselect(
-            "📅 เดือน",
-            options=df['Month'].unique(),
-            default=df['Month'].unique()
-        )
+        m_opts = df['Month'].dropna().unique() if 'Month' in df.columns else ['ตุลาคม']
+        months = st.sidebar.multiselect("📅 เดือน", options=m_opts, default=m_opts)
         
-        leave_types = st.sidebar.multiselect(
-            "🏷️ ประเภทการลา",
-            options=df['Type'].unique(),
-            default=df['Type'].unique()
-        )
+        t_opts = df['Type'].dropna().unique() if 'Type' in df.columns else ['ลาป่วย', 'ลาพักผ่อน', 'ลากิจ', 'สาย']
+        leave_types = st.sidebar.multiselect("🏷️ ประเภทการลา", options=t_opts, default=t_opts)
 
         # Filter data
-        filtered_df = df[
-            df['BudgetYear'].isin(budget_year) & 
-            df['Month'].isin(months) &
-            df['Type'].isin(leave_types)
-        ].copy()
+        filtered_df = df.copy()
+        if 'BudgetYear' in filtered_df.columns and budget_year:
+            filtered_df = filtered_df[filtered_df['BudgetYear'].isin(budget_year)]
+        if 'Month' in filtered_df.columns and months:
+            filtered_df = filtered_df[filtered_df['Month'].isin(months)]
+        if 'Type' in filtered_df.columns and leave_types:
+            filtered_df = filtered_df[filtered_df['Type'].isin(leave_types)]
         
-        filtered_df['LeaveValue'] = filtered_df['IsHalf'].apply(lambda x: 0.5 if x else 1.0)
+        filtered_df['LeaveValue'] = filtered_df['IsHalf'].apply(lambda x: 0.5 if x else 1.0) if 'IsHalf' in filtered_df.columns else 1.0
 
         # --- Metrics Summary ---
-        st.markdown("### 📌 สรุปภาพรวม")
-        col1, col2, col3, col4 = st.columns(4)
+        st.markdown("### 📌 สรุปภาพรวมการลา")
+        col1, col2, col3, col4, col5 = st.columns(5)
         
         def get_count(l_type):
-            return filtered_df[filtered_df['Type'] == l_type]['LeaveValue'].sum()
+            if filtered_df.empty or 'Type' not in filtered_df.columns: return 0
+            val = filtered_df[filtered_df['Type'] == l_type]['LeaveValue'].sum()
+            return int(val) if float(val).is_integer() else val
 
-        # Use emoji icons for metrics
-        col1.metric("🤒 ลาป่วย", f"{get_count('ลาป่วย')} ครั้ง")
-        col2.metric("🏃 ลากิจ", f"{get_count('ลากิจ')} ครั้ง")
-        col3.metric("🏖️ ลาพักผ่อน", f"{get_count('ลาพักผ่อน')} ครั้ง")
+        col1.metric("🤒 ลาป่วย", f"{get_count('ลาป่วย')} วันทำการ")
+        col2.metric("🏃 ลากิจ", f"{get_count('ลากิจ')} วันทำการ")
+        col3.metric("🏖️ ลาพักผ่อน", f"{get_count('ลาพักผ่อน')} วันทำการ")
         col4.metric("⏰ มาสาย", f"{get_count('สาย')} ครั้ง")
+        other_val = filtered_df[~filtered_df['Type'].isin(['ลาป่วย', 'ลากิจ', 'ลาพักผ่อน', 'สาย'])]['LeaveValue'].sum() if not filtered_df.empty else 0
+        col5.metric("👶 ลาอื่นๆ", f"{int(other_val) if float(other_val).is_integer() else other_val} วันทำการ")
         
         st.markdown("<br>", unsafe_allow_html=True)
 
         # --- Main Content Tabs ---
-        tab1, tab2 = st.tabs(["📋 รายการข้อมูลเชิงลึก", "📊 กราฟวิเคราะห์สถิติ"])
+        tab1, tab2, tab3, tab4 = st.tabs([
+            "🏛️ รายงานตามแบบฟอร์มทางการ (กรมเจ้าท่า)",
+            "📋 รายการข้อมูลเชิงลึก (รายวัน)",
+            "📊 กราฟวิเคราะห์สถิติ",
+            "👤 เจาะลึกรายบุคคล"
+        ])
 
+        # ----------------------------------------------------
+        # TAB 1: รายงานตามแบบฟอร์มทางการ (กรมเจ้าท่า)
+        # ----------------------------------------------------
         with tab1:
-            st.markdown("#### 📄 รายละเอียดการลาทั้งหมดตามตัวกรอง")
-            display_df = filtered_df[['BudgetYear', 'Month', 'Day', 'Name', 'Type', 'IsHalf', 'Remarks']].copy()
-            display_df.columns = ['ปีงบ', 'เดือน', 'วันที่', 'ชื่อ-สกุล', 'ประเภท', 'ครึ่งวัน', 'หมายเหตุ']
-            
-            # Format dataframe for better display
-            st.dataframe(
-                display_df, 
-                use_container_width=True,
-                height=400,
-                hide_index=True
-            )
+            org_display = header_meta.get('org') or 'กรมเจ้าท่า'
+            title_display = header_meta.get('title') or 'รายงานการมาปฏิบัติราชการของข้าราชการพลเรือนสามัญ'
+            range_display = header_meta.get('date_range') or 'ตั้งแต่วันที่ 01/10/2569 ถึงวันที่ 28/10/2569'
+            fmt_display = header_meta.get('format') or 'รูปแบบการออกรายงาน : โครงสร้างตามกฎหมาย - ทั้งส่วนราชการ - กรมเจ้าท่า - กระทรวงคมนาคม'
 
+            st.markdown(f"""
+            <div class="official-report-card">
+                <div class="official-org-title">🏛️ {org_display}</div>
+                <div class="official-main-title">{title_display}</div>
+                <div class="official-date-badge">📅 {range_display}</div>
+                <div class="official-format-sub"><b>หมายเหตุรูปแบบ:</b> {fmt_display}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            # Filter options for official table
+            col_f1, col_f2, col_f3 = st.columns([1.5, 1.5, 1.8])
+            with col_f1:
+                search_kw = st.text_input("🔍 ค้นหาชื่อ-สกุล ในตารางทางการ", placeholder="พิมพ์ชื่อหรือนามสกุล...")
+            with col_f2:
+                only_with_leave = st.checkbox("แสดงเฉพาะผู้มีประวัติการลา", value=False)
+            with col_f3:
+                # Export official Excel button
+                excel_official_bytes = generate_official_leave_excel(official_summary_df, header_meta)
+                st.download_button(
+                    label="📥 ดาวน์โหลดแบบฟอร์มทางการ (Excel)",
+                    data=excel_official_bytes,
+                    file_name="รายงานการมาปฏิบัติราชการ_กรมเจ้าท่า.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    type="primary",
+                    use_container_width=True
+                )
+
+            # Prepare filtered view of official summary
+            display_summary = official_summary_df.copy()
+            if search_kw:
+                display_summary = display_summary[display_summary['ชื่อ - สกุล'].str.contains(search_kw, na=False)]
+            if only_with_leave:
+                has_leave_mask = (
+                    display_summary['ลาป่วย_วันทำการ'].notna() |
+                    display_summary['ลากิจ_วันทำการ'].notna() |
+                    display_summary['ลาพักผ่อน_วันทำการ'].notna() |
+                    display_summary['สาย_วันทำการ'].notna() |
+                    display_summary['ลาอื่นๆ_วันทำการ'].notna() |
+                    display_summary['ขาดราชการ_วันทำการ'].notna() |
+                    display_summary['หมายเหตุ'].notna() & (display_summary['หมายเหตุ'] != '')
+                )
+                display_summary = display_summary[has_leave_mask]
+
+            st.caption(f"👥 แสดงผล {len(display_summary)} รายการ จากทั้งหมด {len(official_summary_df)} บุคลากร")
+
+            # Build MultiIndex table for clean official rendering
+            col_tuples = [
+                ('ชื่อ - สกุล', ''),
+                ('ลาป่วย', 'วันทำการ'),
+                ('ลาป่วย', 'จำนวนครั้ง'),
+                ('ลากิจ', 'วันทำการ'),
+                ('ลากิจ', 'จำนวนครั้ง'),
+                ('รวมลาป่วย กิจ', 'วันทำการ'),
+                ('รวมลาป่วย กิจ', 'จำนวนครั้ง'),
+                ('สาย (วันทำการ)', ''),
+                ('ลาพักผ่อน', 'วันทำการ'),
+                ('ลาพักผ่อน', 'จำนวนครั้ง'),
+                ('ลาอื่นๆ (วันทำการ)', ''),
+                ('ขาดราชการ (วันทำการ)', ''),
+                ('หมายเหตุ', '')
+            ]
+
+            formatted_rows = []
+            for _, r in display_summary.iterrows():
+                row_vals = [
+                    r.get('ชื่อ - สกุล', ''),
+                    r.get('ลาป่วย_วันทำการ'),
+                    r.get('ลาป่วย_จำนวนครั้ง'),
+                    r.get('ลากิจ_วันทำการ'),
+                    r.get('ลากิจ_จำนวนครั้ง'),
+                    r.get('รวมลาป่วย_กิจ_วันทำการ'),
+                    r.get('รวมลาป่วย_กิจ_จำนวนครั้ง'),
+                    r.get('สาย_วันทำการ'),
+                    r.get('ลาพักผ่อน_วันทำการ'),
+                    r.get('ลาพักผ่อน_จำนวนครั้ง'),
+                    r.get('ลาอื่นๆ_วันทำการ'),
+                    r.get('ขาดราชการ_วันทำการ'),
+                    r.get('หมายเหตุ', '')
+                ]
+                clean_vals = []
+                for idx, v in enumerate(row_vals):
+                    if idx in [0, 12]:
+                        clean_vals.append("" if (pd.isna(v) or v is None or str(v).strip() == 'None') else str(v).strip())
+                    else:
+                        if pd.isna(v) or v is None or v == '':
+                            clean_vals.append("")
+                        else:
+                            try:
+                                f_val = float(v)
+                                clean_vals.append(str(int(f_val)) if f_val.is_integer() else str(f_val))
+                            except Exception:
+                                clean_vals.append(str(v))
+                formatted_rows.append(clean_vals)
+
+            if formatted_rows:
+                multi_cols = pd.MultiIndex.from_tuples(col_tuples)
+                df_official_table = pd.DataFrame(formatted_rows, columns=multi_cols)
+                
+                # Apply styles
+                def highlight_cells(col):
+                    styles = []
+                    col_name = col.name
+                    for val in col:
+                        v = str(val).strip()
+                        if col_name == ('ชื่อ - สกุล', ''):
+                            styles.append("text-align: left; font-weight: 600; min-width: 240px;")
+                        elif col_name == ('หมายเหตุ', ''):
+                            styles.append("text-align: left; min-width: 300px; color: #2D3748;")
+                        elif v != "":
+                            if 'ป่วย' in col_name[0]:
+                                styles.append("background-color: #FFF5F5; color: #C53030; font-weight: 700; text-align: center;")
+                            elif 'กิจ' in col_name[0]:
+                                styles.append("background-color: #F0FFF4; color: #22543D; font-weight: 700; text-align: center;")
+                            elif 'พักผ่อน' in col_name[0]:
+                                styles.append("background-color: #EBF8FF; color: #2B6CB0; font-weight: 700; text-align: center;")
+                            elif 'สาย' in col_name[0]:
+                                styles.append("background-color: #FEFCBF; color: #744210; font-weight: 700; text-align: center;")
+                            else:
+                                styles.append("background-color: #FAF5FF; color: #553C9A; font-weight: 700; text-align: center;")
+                        else:
+                            styles.append("text-align: center;")
+                    return styles
+
+                st.dataframe(
+                    df_official_table.style.apply(highlight_cells, axis=0),
+                    use_container_width=True,
+                    height=520,
+                    hide_index=True
+                )
+            else:
+                st.info("ไม่พบรายการที่ตรงกับเงื่อนไขการค้นหา")
+
+        # ----------------------------------------------------
+        # TAB 2: รายละเอียดการลา (Daily Records)
+        # ----------------------------------------------------
         with tab2:
-            st.markdown("#### 📈 เปรียบเทียบจำนวนครั้งการลาแยกตามบุคคล")
-            summary_by_person = filtered_df.groupby(['Name', 'Type'])['LeaveValue'].sum().reset_index(name='จำนวนครั้ง')
+            st.markdown("#### 📄 รายละเอียดการลาทั้งหมดตามตัวกรอง")
+            if not filtered_df.empty:
+                cols_to_show = [c for c in ['BudgetYear', 'Month', 'Day', 'Name', 'Type', 'IsHalf', 'Remarks'] if c in filtered_df.columns]
+                display_df = filtered_df[cols_to_show].copy()
+                col_rename = {'BudgetYear': 'ปีงบ', 'Month': 'เดือน', 'Day': 'วันที่', 'Name': 'ชื่อ-สกุล', 'Type': 'ประเภท', 'IsHalf': 'ครึ่งวัน', 'Remarks': 'หมายเหตุ'}
+                display_df = display_df.rename(columns=col_rename)
+                
+                st.dataframe(
+                    display_df, 
+                    use_container_width=True,
+                    height=450,
+                    hide_index=True
+                )
+            else:
+                st.info("ไม่พบข้อมูลรายการลาตามตัวกรองที่เลือก")
+
+        # ----------------------------------------------------
+        # TAB 3: กราฟวิเคราะห์สถิติ
+        # ----------------------------------------------------
+        with tab3:
+            st.markdown("#### 📈 เปรียบเทียบจำนวนวัน/ครั้งการลาแยกตามบุคคล")
+            summary_by_person = filtered_df.groupby(['Name', 'Type'])['LeaveValue'].sum().reset_index(name='จำนวนครั้ง') if not filtered_df.empty else pd.DataFrame()
             
             if not summary_by_person.empty:
-                # Use professional color palette
                 color_discrete_map = {
                     'ลาป่วย': '#ef553b', 
                     'ลากิจ': '#00cc96', 
                     'ลาพักผ่อน': '#636efa', 
-                    'สาย': '#ab63fa'
+                    'สาย': '#ab63fa',
+                    'ลาช่วยภริยาคลอดบุตร': '#ffa15a'
                 }
                 
                 fig = px.bar(
@@ -292,430 +523,90 @@ if df is not None:
                 )
                 fig.update_layout(
                     xaxis_title="รายชื่อบุคลากร",
-                    yaxis_title="จำนวนครั้ง",
-                    legend_title="ประเภท",
-                    font=dict(family="Sarabun, sans-serif"),
+                    yaxis_title="จำนวนวัน/ครั้ง",
+                    legend_title="ประเภทการลา",
+                    font=dict(family="Prompt, sans-serif"),
                     hovermode="x unified",
                     margin=dict(l=20, r=20, t=20, b=20)
                 )
                 st.plotly_chart(fig, use_container_width=True)
+
+                # Download graph data
+                graph_pivot = summary_by_person.pivot_table(index='Name', columns='Type', values='จำนวนครั้ง', fill_value=0).reset_index()
+                buf_g = io.BytesIO()
+                with pd.ExcelWriter(buf_g, engine='xlsxwriter') as writer:
+                    graph_pivot.to_excel(writer, index=False, sheet_name='ข้อมูลกราฟ')
+                st.download_button(
+                    label="📊 ดาวน์โหลดข้อมูลกราฟสถิติ (Excel)",
+                    data=buf_g.getvalue(),
+                    file_name="สรุปสถิติวันลา.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
             else:
                 st.info("ไม่พบข้อมูลสำหรับสร้างกราฟจากตัวกรองที่เลือก")
 
-        # --- Batch Export Section ---
-        def generate_batch_report(df_to_export):
-            buffer = io.BytesIO()
-            wb = openpyxl.Workbook()
-            ws = wb.active
-            ws.title = "ประวัติการลาทั้งหมด"
-            
-            font_bold = Font(bold=True, name='TH SarabunPSK', size=16)
-            font_normal = Font(name='TH SarabunPSK', size=16)
-            align_center = Alignment(horizontal='center', vertical='center')
-            align_left = Alignment(horizontal='left', vertical='center')
-            border = Border(
-                left=Side(border_style='thin', color='000000'),
-                right=Side(border_style='thin', color='000000'),
-                top=Side(border_style='thin', color='000000'),
-                bottom=Side(border_style='thin', color='000000')
-            )
-            fill_yellow = PatternFill(start_color='FFFF00', end_color='FFFF00', fill_type='solid')
-            fill_purple = PatternFill(start_color='C0A0C0', end_color='C0A0C0', fill_type='solid')
-            
-            row_num = 1
-            months_order = ['ตุลาคม', 'พฤศจิกายน', 'ธันวาคม', 'มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน']
-            
-            for person in sorted(df_to_export['Name'].unique()):
-                p_data = df_to_export[df_to_export['Name'] == person].sort_values(['BudgetYear', 'Month', 'Day'])
-                if p_data.empty: continue
-                
-                budget_years = p_data['BudgetYear'].unique()
-                target_year = budget_years[0] if len(budget_years) > 0 else '2568'
-                prev_year = int(target_year) - 1
-                
-                ws.cell(row=row_num, column=1, value=f"สรุปวันลาปีงบประมาณ (1 ตุลาคม {prev_year} - 30 กันยายน {target_year})").font = font_bold
-                ws.cell(row=row_num, column=1).alignment = align_center
-                ws.merge_cells(start_row=row_num, start_column=1, end_row=row_num, end_column=6)
-                row_num += 1
-                
-                ws.cell(row=row_num, column=1, value=person).font = font_bold
-                ws.cell(row=row_num, column=1).alignment = align_center
-                ws.merge_cells(start_row=row_num, start_column=1, end_row=row_num, end_column=6)
-                row_num += 1
-                
-                ws.cell(row=row_num, column=1, value="มีสิทธิลาป่วยโดยไม่ถูกหักค่าจ้าง 15 วัน").font = font_bold
-                ws.cell(row=row_num, column=1).alignment = align_center
-                ws.merge_cells(start_row=row_num, start_column=1, end_row=row_num, end_column=6)
-                row_num += 1
-                
-                headers = ['วัน เดือน ปี', 'ป่วย', 'กิจ', 'พักผ่อน', 'สาย', 'หมายเหตุ']
-                for col_num, header in enumerate(headers, 1):
-                    cell = ws.cell(row=row_num, column=col_num, value=header)
-                    cell.font = font_bold
-                    cell.alignment = align_center
-                    cell.border = border
-                row_num += 1
-                
-                sums = {'ลาป่วย': 0.0, 'ลากิจ': 0.0, 'ลาพักผ่อน': 0.0, 'สาย': 0.0}
-                
-                for _, row in p_data.iterrows():
-                    month = row['Month']
-                    month_idx = months_order.index(month) if month in months_order else 0
-                    year_str = str(prev_year) if month_idx < 3 else str(target_year)
-                    date_str = f"วันที่ {row['Day']} {month} {year_str}"
-                    
-                    ws.cell(row=row_num, column=1, value=date_str).alignment = align_center
-                    
-                    type_str = row['Type']
-                    is_half = row['IsHalf']
-                    val_str = 'ครึ่ง' if is_half else 1
-                    val_num = 0.5 if is_half else 1.0
-                    
-                    col_map = {'ลาป่วย': 2, 'ลากิจ': 3, 'ลาพักผ่อน': 4, 'สาย': 5}
-                    target_col = col_map.get(type_str, 2)
-                    if type_str in sums: sums[type_str] += val_num
-                    
-                    ws.cell(row=row_num, column=target_col, value=val_str).alignment = align_center
-                    for c in range(2, 6):
-                        if c != target_col: ws.cell(row=row_num, column=c, value='')
-                    ws.cell(row=row_num, column=6, value=row['Remarks']).alignment = align_left
-                    
-                    for c in range(1, 7):
-                        ws.cell(row=row_num, column=c).border = border
-                        ws.cell(row=row_num, column=c).font = font_normal
-                    row_num += 1
-                
-                ws.cell(row=row_num, column=1, value='รวมทั้งปีงบประมาณ').alignment = align_center
-                ws.cell(row=row_num, column=1).font = font_bold
-                ws.cell(row=row_num, column=1).border = border
-                ws.cell(row=row_num, column=1).fill = fill_yellow
-                
-                def format_sum(s):
-                    if s == 0: return ""
-                    int_part = int(s)
-                    if s == int_part: return str(int_part)
-                    if int_part == 0: return "ครึ่ง"
-                    return f"{int_part}ครึ่ง"
-                
-                for i, key in enumerate(['ลาป่วย', 'ลากิจ', 'ลาพักผ่อน', 'สาย']):
-                    cell = ws.cell(row=row_num, column=i+2, value=format_sum(sums[key]))
-                    cell.alignment = align_center
-                    cell.font = font_bold
-                    cell.border = border
-                    cell.fill = fill_purple
-                
-                ws.cell(row=row_num, column=6, value='').border = border
-                row_num += 1
-
-            ws.column_dimensions['A'].width = 25
-            ws.column_dimensions['B'].width = 8
-            ws.column_dimensions['C'].width = 8
-            ws.column_dimensions['D'].width = 12
-            ws.column_dimensions['E'].width = 8
-            ws.column_dimensions['F'].width = 30
-            
-            wb.save(buffer)
-            return buffer.getvalue()
-
-        st.markdown("<br>", unsafe_allow_html=True)
-        col_batch, col_graph, _ = st.columns([1.5, 1.5, 1])
-        with col_batch:
-            st.download_button(
-                label="📥 ดาวน์โหลดรายงานรายบุคคลแบบทั้งหมด (Excel)",
-                data=generate_batch_report(filtered_df),
-                file_name="รายงานการลา_ทั้งหมด.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-                type="primary"
-            )
-            
-        with col_graph:
-            # Generate summary data for graph export
-            graph_data = filtered_df.groupby(['Name', 'Type'])['LeaveValue'].sum().reset_index(name='จำนวนวัน/ครั้ง')
-            if not graph_data.empty:
-                pivot_graph = graph_data.pivot_table(index='Name', columns='Type', values='จำนวนวัน/ครั้ง', fill_value=0).reset_index()
-                buffer_graph = io.BytesIO()
-                with pd.ExcelWriter(buffer_graph, engine='xlsxwriter') as writer:
-                    pivot_graph.to_excel(writer, index=False, sheet_name='ข้อมูลกราฟ')
-                    
-                    workbook = writer.book
-                    worksheet = writer.sheets['ข้อมูลกราฟ']
-                    
-                    # Set column widths
-                    worksheet.set_column(0, 0, 30)
-                    if len(pivot_graph.columns) > 1:
-                        worksheet.set_column(1, len(pivot_graph.columns) - 1, 12)
-                    
-                    # Create a column chart object
-                    chart = workbook.add_chart({'type': 'column'})
-                    
-                    max_row = len(pivot_graph)
-                    # Add series for each leave type
-                    for i in range(1, len(pivot_graph.columns)):
-                        chart.add_series({
-                            'name':       ['ข้อมูลกราฟ', 0, i],
-                            'categories': ['ข้อมูลกราฟ', 1, 0, max_row, 0],
-                            'values':     ['ข้อมูลกราฟ', 1, i, max_row, i],
-                            'data_labels': {'value': True}
-                        })
-                        
-                    chart.set_x_axis({'name': 'รายชื่อบุคลากร'})
-                    chart.set_y_axis({'name': 'จำนวนวัน/ครั้ง'})
-                    chart.set_title({'name': 'เปรียบเทียบจำนวนครั้งการลาแยกตามบุคคล'})
-                    chart.set_size({'width': 900, 'height': 500})
-                    
-                    # Insert the chart to the right of the data
-                    chart_col = chr(ord('A') + len(pivot_graph.columns) + 1)
-                    worksheet.insert_chart(f'{chart_col}2', chart)
-                
-                st.download_button(
-                    label="📊 ดาวน์โหลดข้อมูลกราฟ (Excel)",
-                    data=buffer_graph.getvalue(),
-                    file_name="สรุปข้อมูลกราฟ.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True
-                )
-
-        # --- Individual Search Section ---
-        st.markdown("---")
-        st.markdown("### 🔍 เจาะลึกรายบุคคล")
-        
-        col_search, col_space = st.columns([1, 2])
-        with col_search:
+        # ----------------------------------------------------
+        # TAB 4: เจาะลึกรายบุคคล
+        # ----------------------------------------------------
+        with tab4:
+            st.markdown("### 🔍 ตรวจสอบประวัติการลารายบุคคล")
+            all_person_names = sorted(df['Name'].dropna().unique()) if 'Name' in df.columns else []
             selected_person = st.selectbox(
                 "👤 เลือกระบุรายชื่อเพื่อดูประวัติทั้งหมด", 
-                options=["-- เลือกรายชื่อ --"] + sorted(df['Name'].unique())
+                options=["-- เลือกรายชื่อ --"] + all_person_names
             )
-        
-        if selected_person != "-- เลือกรายชื่อ --":
-            # Use filtered_df instead of df so sidebar filters apply here too
-            person_data = filtered_df[filtered_df['Name'] == selected_person].sort_values(['BudgetYear', 'Month', 'Day'])
             
-            st.markdown(f"##### ประวัติของ: <span style='color:#1f77b4;'>{selected_person}</span>", unsafe_allow_html=True)
-            
-            if person_data.empty:
-                st.warning("ไม่พบประวัติการลา")
-            else:
-                # --- Calculate Detailed Summary ---
-                st.markdown("##### 📊 สรุปยอดการลา (แยกตามเดือน)")
+            if selected_person != "-- เลือกรายชื่อ --":
+                person_data = filtered_df[filtered_df['Name'] == selected_person].sort_values(['BudgetYear', 'Month', 'Day']) if 'Name' in filtered_df.columns else pd.DataFrame()
                 
-                # Group by BudgetYear, Month, and Type
-                monthly_summary = person_data.groupby(['BudgetYear', 'Month', 'Type'])['LeaveValue'].sum().reset_index()
+                st.markdown(f"##### ประวัติของ: <span style='color:#E97D32; font-weight:700;'>{selected_person}</span>", unsafe_allow_html=True)
                 
-                # Create a pivot table for better display: Rows = Month, Columns = Leave Type
-                pivot_summary = monthly_summary.pivot_table(
-                    index=['BudgetYear', 'Month'], 
-                    columns='Type', 
-                    values='LeaveValue', 
-                    fill_value=0
-                ).reset_index()
-                
-                # Display the summary table
-                st.dataframe(
-                    pivot_summary.style.format(precision=1),
-                    use_container_width=True,
-                    hide_index=True
-                )
-                
-                # Total summary for the person
-                st.markdown("##### 📌 สรุปยอดรวมทั้งหมด")
-                total_summary = person_data.groupby('Type')['LeaveValue'].sum().reset_index()
-                cols = st.columns(len(total_summary) if not total_summary.empty else 1)
-                for i, row in total_summary.iterrows():
-                    cols[i].metric(row['Type'], f"{row['LeaveValue']} วัน/ครั้ง")
-                
-                st.markdown("<br>", unsafe_allow_html=True)
-                
-                budget_years = person_data['BudgetYear'].unique()
-                target_year = budget_years[0] if len(budget_years) > 0 else '2568'
-                prev_year = int(target_year) - 1
-                
-                # --- Detailed History Table ---
-                st.markdown("##### 📄 ประวัติการลาโดยละเอียด")
-                
-                ui_display_data = []
-                months_order = ['ตุลาคม', 'พฤศจิกายน', 'ธันวาคม', 'มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน']
-                
-                for _, row in person_data.iterrows():
-                    month = row['Month']
-                    month_idx = months_order.index(month) if month in months_order else 0
-                    year_str = str(prev_year) if month_idx < 3 else str(target_year)
-                    date_str = f"วันที่ {row['Day']} {month} {year_str}"
+                if person_data.empty:
+                    st.warning("ไม่พบประวัติการลาของบุคคลนี้ตามตัวกรองที่เลือก")
+                else:
+                    # Metrics for person
+                    st.markdown("##### 📌 สรุปยอดรวมของบุคคลนี้")
+                    total_summary = person_data.groupby('Type')['LeaveValue'].sum().reset_index()
+                    cols_p = st.columns(len(total_summary) if not total_summary.empty else 1)
+                    for i, row in total_summary.iterrows():
+                        v = row['LeaveValue']
+                        v_str = int(v) if float(v).is_integer() else v
+                        cols_p[i].metric(row['Type'], f"{v_str} วันทำการ")
                     
-                    type_str = row['Type']
-                    is_half = row['IsHalf']
-                    val_str = 'ครึ่ง' if is_half else '1'
+                    st.markdown("<br>", unsafe_allow_html=True)
                     
-                    ui_row = {
-                        'วัน เดือน ปี': date_str,
-                        'ป่วย': val_str if type_str == 'ลาป่วย' else '',
-                        'กิจ': val_str if type_str == 'ลากิจ' else '',
-                        'พักผ่อน': val_str if type_str == 'ลาพักผ่อน' else '',
-                        'สาย': val_str if type_str == 'สาย' else '',
-                        'หมายเหตุ': row['Remarks']
-                    }
-                    ui_display_data.append(ui_row)
-                
-                ui_df = pd.DataFrame(ui_display_data)
-                
-                def style_center(val):
-                    return 'text-align: center;'
-                    
-                st.dataframe(
-                    ui_df.style.map(style_center, subset=['ป่วย', 'กิจ', 'พักผ่อน', 'สาย']) if hasattr(ui_df.style, "map") else ui_df.style.applymap(style_center, subset=['ป่วย', 'กิจ', 'พักผ่อน', 'สาย']),
-                    use_container_width=True, 
-                    hide_index=True
-                )
-                
-                # --- Export to Excel ---
-                st.markdown("<br>", unsafe_allow_html=True)
-                
-                buffer = io.BytesIO()
-                
-                # We will build the Excel file from scratch using openpyxl instead of pandas
-                wb = openpyxl.Workbook()
-                ws = wb.active
-                ws.title = "ประวัติการลา"
-                
-                # Styles
-                font_bold = Font(bold=True, name='TH SarabunPSK', size=16)
-                font_normal = Font(name='TH SarabunPSK', size=16)
-                align_center = Alignment(horizontal='center', vertical='center')
-                align_left = Alignment(horizontal='left', vertical='center')
-                border = Border(
-                    left=Side(border_style='thin', color='000000'),
-                    right=Side(border_style='thin', color='000000'),
-                    top=Side(border_style='thin', color='000000'),
-                    bottom=Side(border_style='thin', color='000000')
-                )
-                
-                # Row 1: สรุปวันลาปีงบประมาณ
-                ws['A1'] = f"สรุปวันลาปีงบประมาณ (1 ตุลาคม {prev_year} - 30 กันยายน {target_year})"
-                ws['A1'].font = font_bold
-                ws['A1'].alignment = align_center
-                ws.merge_cells('A1:F1')
-                
-                # Row 2: ชื่อ-สกุล
-                ws['A2'] = selected_person
-                ws['A2'].font = font_bold
-                ws['A2'].alignment = align_center
-                ws.merge_cells('A2:F2')
-                
-                # Row 3: มีสิทธิลาป่วยโดยไม่ถูกหักค่าจ้าง 15 วัน
-                ws['A3'] = "มีสิทธิลาป่วยโดยไม่ถูกหักค่าจ้าง 15 วัน"
-                ws['A3'].font = font_bold
-                ws['A3'].alignment = align_center
-                ws.merge_cells('A3:F3')
-                
-                # Row 4: Headers
-                headers = ['วัน เดือน ปี', 'ป่วย', 'กิจ', 'พักผ่อน', 'สาย', 'หมายเหตุ']
-                for col_num, header in enumerate(headers, 1):
-                    cell = ws.cell(row=4, column=col_num)
-                    cell.value = header
-                    cell.font = font_bold
-                    cell.alignment = align_center
-                    cell.border = border
-                    
-                # Column widths
-                ws.column_dimensions['A'].width = 25
-                ws.column_dimensions['B'].width = 8
-                ws.column_dimensions['C'].width = 8
-                ws.column_dimensions['D'].width = 12
-                ws.column_dimensions['E'].width = 8
-                ws.column_dimensions['F'].width = 30
-                
-                # Data Rows
-                row_num = 5
-                sums = {'ลาป่วย': 0.0, 'ลากิจ': 0.0, 'ลาพักผ่อน': 0.0, 'สาย': 0.0}
-                months_order = ['ตุลาคม', 'พฤศจิกายน', 'ธันวาคม', 'มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน']
-                
-                for _, row in person_data.iterrows():
-                    month = row['Month']
-                    month_idx = months_order.index(month) if month in months_order else 0
-                    year_str = str(prev_year) if month_idx < 3 else str(target_year)
-                    
-                    date_str = f"วันที่ {row['Day']} {month} {year_str}"
-                    ws.cell(row=row_num, column=1, value=date_str).alignment = align_center
-                    
-                    type_str = row['Type']
-                    is_half = row['IsHalf']
-                    val_str = 'ครึ่ง' if is_half else 1
-                    val_num = 0.5 if is_half else 1.0
-                    
-                    col_map = {'ลาป่วย': 2, 'ลากิจ': 3, 'ลาพักผ่อน': 4, 'สาย': 5}
-                    target_col = col_map.get(type_str, 2)
-                    
-                    if type_str in sums:
-                        sums[type_str] += val_num
+                    # Detailed History Table
+                    st.markdown("##### 📄 ประวัติการลาโดยละเอียด")
+                    ui_display_data = []
+                    for _, row in person_data.iterrows():
+                        m_str = row.get('Month', '')
+                        d_num = row.get('Day', '')
+                        y_str = row.get('BudgetYear', '')
+                        date_str = f"วันที่ {d_num} {m_str} {y_str}".strip()
                         
-                    ws.cell(row=row_num, column=target_col, value=val_str).alignment = align_center
-                    
-                    # Fill other columns with empty
-                    for c in range(2, 6):
-                        if c != target_col:
-                            ws.cell(row=row_num, column=c, value='')
-                            
-                    ws.cell(row=row_num, column=6, value=row['Remarks']).alignment = align_left
-                    
-                    # Apply borders
-                    for c in range(1, 7):
-                        ws.cell(row=row_num, column=c).border = border
-                        ws.cell(row=row_num, column=c).font = font_normal
+                        t_str = row.get('Type', '')
+                        is_h = row.get('IsHalf', False)
+                        val_str = '0.5' if is_h else '1'
                         
-                    row_num += 1
+                        ui_display_data.append({
+                            'วัน เดือน ปี': date_str,
+                            'ประเภทการลา': t_str,
+                            'จำนวนวัน': val_str,
+                            'หมายเหตุ': row.get('Remarks', '')
+                        })
                     
-                # Summary Row
-                ws.cell(row=row_num, column=1, value='รวมทั้งปีงบประมาณ').alignment = align_center
-                ws.cell(row=row_num, column=1).font = font_bold
-                ws.cell(row=row_num, column=1).border = border
-                
-                def format_sum(s):
-                    if s == 0: return ""
-                    int_part = int(s)
-                    if s == int_part: return str(int_part)
-                    if int_part == 0: return "ครึ่ง"
-                    return f"{int_part}ครึ่ง"
-                    
-                for i, key in enumerate(['ลาป่วย', 'ลากิจ', 'ลาพักผ่อน', 'สาย']):
-                    ws.cell(row=row_num, column=i+2, value=format_sum(sums[key])).alignment = align_center
-                    ws.cell(row=row_num, column=i+2).font = font_bold
-                    ws.cell(row=row_num, column=i+2).border = border
-                    
-                ws.cell(row=row_num, column=6, value='').border = border
-                
-                # Fill colors for summary (yellow for total label, purple for sum cols 2,3,4)
-                fill_yellow = PatternFill(start_color='FFFF00', end_color='FFFF00', fill_type='solid')
-                fill_purple = PatternFill(start_color='C0A0C0', end_color='C0A0C0', fill_type='solid')
-                
-                ws.cell(row=row_num, column=1).fill = fill_yellow
-                ws.cell(row=row_num, column=2).fill = fill_purple
-                ws.cell(row=row_num, column=3).fill = fill_purple
-                ws.cell(row=row_num, column=4).fill = fill_purple
-                ws.cell(row=row_num, column=5).fill = fill_purple
-                
-                wb.save(buffer)
-                
-                col_btn1, col_btn2 = st.columns([1, 3])
-                with col_btn1:
-                    st.download_button(
-                        label="📥 ดาวน์โหลดรายงาน (Excel)",
-                        data=buffer.getvalue(),
-                        file_name=f"รายงานการลา_{selected_person.replace(' ', '_')}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True
-                    )
+                    st.dataframe(pd.DataFrame(ui_display_data), use_container_width=True, hide_index=True)
 
 else:
     # Empty State UI
     st.markdown("<br><br>", unsafe_allow_html=True)
     col_img1, col_img2, col_img3 = st.columns([1, 2, 1])
     with col_img2:
-        st.info("👋 ยินดีต้อนรับ! กรุณาอัปโหลดไฟล์ Excel ทางเมนูด้านซ้ายเพื่อเริ่มต้นใช้งานระบบ")
+        st.info("👋 ยินดีต้อนรับสู่ระบบวันลา! กรุณาอัปโหลดไฟล์ตารางวันลาทางเมนูด้านซ้ายเพื่อเริ่มต้นใช้งาน")
         st.markdown(
             """
-            <div style='text-align: center; opacity: 0.5; margin-top: 20px;'>
-                <img src="https://img.icons8.com/clouds/200/000000/upload.png" width="150" />
-                <p>รองรับไฟล์ .xlsx</p>
+            <div style='text-align: center; opacity: 0.7; margin-top: 20px; line-height: 1.8;'>
+                <p>📄 รองรับทั้งแบบฟอร์มทางการกรมเจ้าท่า (<b>ข้าราชการ.xlsx</b> หรือ <b>.csv</b>)<br>และไฟล์ตารางวันลาประจำปี (<b>1.ตารางวันลา.xlsx</b>)</p>
             </div>
             """, 
             unsafe_allow_html=True
