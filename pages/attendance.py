@@ -1,4 +1,5 @@
 import os
+import json
 import calendar
 import hmac
 import streamlit as st
@@ -421,7 +422,20 @@ def build_monthly_report_table(df_dept: pd.DataFrame, df_all: pd.DataFrame, exc_
         if is_it_holiday(dt_d, exc_week, exc_th, extra_list):
             holiday_days.add(d)
 
-    emp_names = df_dept['ชื่อ-สกุล'].drop_duplicates().tolist()
+    roster = get_active_roster()
+    roster_order_map = {re.sub(r'\s+', '', p['name']): i for i, p in enumerate(roster)}
+
+    def _roster_sort_key(name: str):
+        clean_k = re.sub(r'\s+', '', name)
+        if clean_k in roster_order_map:
+            return (0, roster_order_map[clean_k])
+        core_k = clean_core_key(clean_k)
+        for p_name, idx in roster_order_map.items():
+            if clean_core_key(p_name) == core_k or p_name.startswith(clean_k) or clean_k.startswith(p_name):
+                return (0, idx)
+        return (1, name)
+
+    emp_names = sorted(df_dept['ชื่อ-สกุล'].drop_duplicates().tolist(), key=_roster_sort_key)
 
     df_dept_m = df_dept[(df_dept['วันที่'].dt.year == year) & (df_dept['วันที่'].dt.month == month)]
     status_lookup = {}
@@ -581,7 +595,7 @@ def df_to_excel_bytes(pivot: pd.DataFrame, df_all: pd.DataFrame, dept_label: str
 
             # Column widths matching original template
             ws.set_column(0, 0, 4.0)
-            ws.set_column(1, 1, 28.0)
+            ws.set_column(1, 1, 30.0)
             ws.set_column(2, last_day_col, 4.8)
             ws.set_column(last_day_col + 1, last_day_col + 1, 3.0)
             ws.set_column(legend_col, legend_col, 21.0)
@@ -859,8 +873,8 @@ def parse_table_page(page, late_threshold, exc_week, exc_th, extra_list, source=
     """อ่านข้อมูลหน้าตารางโดยตรงจากพิกัดตัวอักษรเพื่อป้องกันปัญหาสระลอย/ข้อความเพี้ยนจาก pdfplumber extract_text"""
     col_bounds = [
         ('แผนก', 0, 120),
-        ('ชื่อ-สกุล', 120, 282),
-        ('วันที่', 282, 355),
+        ('ชื่อ-สกุล', 120, 288),
+        ('วันที่', 288, 355),
         ('เข้างาน', 355, 415),
         ('ออกงาน', 415, 475),
         ('สาย', 475, 595),
@@ -887,8 +901,8 @@ def parse_table_page(page, late_threshold, exc_week, exc_th, extra_list, source=
             cell_chars = [c for c in row_chars if x0 <= c['x0'] < x1]
             raw_data[col_name] = normalize_whitespace("".join(c['text'] for c in cell_chars))
             
-        dept = raw_data.get('แผนก', '')
-        name = raw_data.get('ชื่อ-สกุล', '')
+        dept = normalize_thai_chars(raw_data.get('แผนก', ''))
+        name = normalize_thai_chars(raw_data.get('ชื่อ-สกุล', ''))
         date_str = raw_data.get('วันที่', '')
         cin = raw_data.get('เข้างาน', '')
         cout = raw_data.get('ออกงาน', '')
@@ -955,15 +969,150 @@ def format_df_for_display(df: pd.DataFrame) -> pd.DataFrame:
             df_disp['วันที่'] = df_disp['วันที่'].dt.strftime('%d/%m/%Y')
     return df_disp
 
+TITLES_PATTERN = r'^(ว่าที่ร้อยตรีหญิง|ว่าที่ร้อยตรี|ว่าที่ร้อยโท|ว่าที่เรือตรี|ว่าที่ร\.ต\.หญิง|ว่าที่ร\.ต\.|ว่าที่|พันตรีหญิง|พันตรี|พ\.ต\.หญิง|พ\.ต\.|จ่าเอก|จ\.อ\.|นางสาว|นาง|นาย|น\.ส\.|ดร\.|จ\.ส\.|พ\.จ\.|ร\.ต\.|ร\.ท\.|ร\.อ\.|น\.ต\.|น\.ท\.|น\.อ\.|พ\.ท\.|พ\.อ\.|ด\.ต\.|ส\.ต\.|ส\.อ\.|จ\.ต\.|จ\.ท\.)\s*'
+
+def normalize_thai_chars(s: str) -> str:
+    """จัดระเบียบตัวอักษรไทย แปลงสระอำที่แยกสระให้เป็นรูปสมบูรณ์ และจัดระเบียบช่องว่าง"""
+    if not s:
+        return ""
+    s = str(s).strip()
+    s = re.sub(r'([ก-ฮ])\s+า', r'\1ำ', s)
+    s = re.sub(r'([ก-ฮ])\s+้า', r'\1้ำ', s)
+    s = s.replace('ลูกจ้างประจา', 'ลูกจ้างประจำ')
+    s = re.sub(r'\s+', ' ', s).strip()
+    return s
+
+def clean_core_key(name: str) -> str:
+    """ตัดคำนำหน้ายศ/คำนำหน้านามและช่องว่าง เพื่อใช้เป็นคีย์หลักในการเปรียบเทียบชื่อ"""
+    n = re.sub(r'\s+', '', str(name))
+    n = re.sub(TITLES_PATTERN, '', n)
+    return n
+
+@st.cache_data
+def get_canonical_roster_data() -> list:
+    """โหลดบัญชีรายชื่อบุคลากรทางการศูนย์ฝึกพาณิชย์นาวีจาก canonical_personnel.json"""
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.join(base_dir, "..", "canonical_personnel.json"),
+        os.path.join(base_dir, "canonical_personnel.json"),
+        os.path.join(os.getcwd(), "canonical_personnel.json"),
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                pass
+    return []
+
+def get_active_roster() -> list:
+    """ดึงข้อมูลบัญชีรายชื่อบุคลากร (รวมข้อมูลตั้งต้นและข้อมูลเพิ่มเติมจากตารางวันลา)"""
+    if 'active_roster' not in st.session_state:
+        st.session_state.active_roster = get_canonical_roster_data().copy()
+    return st.session_state.active_roster
+
+def enrich_canonical_roster_from_leave(leave_df: pd.DataFrame):
+    """เพิ่มชื่อบุคลากรจากตารางวันลาเข้าสู่ active roster หากยังไม่มี"""
+    if leave_df is None or leave_df.empty or 'Name' not in leave_df.columns:
+        return
+    active_roster = get_active_roster()
+    existing_keys = {clean_core_key(p['name']) for p in active_roster}
+    added = False
+    for name in leave_df['Name'].dropna().unique():
+        norm_n = normalize_thai_chars(name)
+        k = clean_core_key(norm_n)
+        if k and k not in existing_keys:
+            existing_keys.add(k)
+            active_roster.append({'dept': '', 'name': norm_n})
+            added = True
+    if added:
+        st.session_state.active_roster = active_roster
+
+def repair_truncated_name(name: str, dept: str = "") -> tuple:
+    """กู้คืนชื่อ-สกุลที่ถูกตัดทอน (Truncated) จากเครื่องสแกนนิ้วให้สมบูรณ์ โดยเทียบกับบัญชีรายชื่อทางการ"""
+    norm_name = normalize_thai_chars(name)
+    norm_dept = normalize_thai_chars(dept)
+    if not norm_name:
+        return norm_name, norm_dept
+
+    roster = get_active_roster()
+    if not roster:
+        return norm_name, norm_dept
+
+    core_pdf = clean_core_key(norm_name)
+    raw_pdf = re.sub(r'\s+', '', norm_name)
+
+    # 1. ตรงกันแบบสมบูรณ์ (ตัดช่องว่าง)
+    for c in roster:
+        if re.sub(r'\s+', '', c['name']) == raw_pdf:
+            return c['name'], c['dept'] or norm_dept
+
+    # 2. ตรงกันระดับชื่อหลัก (ตัดคำนำหน้าและช่องว่าง)
+    for c in roster:
+        if clean_core_key(c['name']) == core_pdf:
+            return c['name'], c['dept'] or norm_dept
+
+    # 3. ชื่อในฐานข้อมูลเริ่มต้นด้วยชื่อจาก PDF ที่ถูกตัดทอน (Prefix Match)
+    prefix_candidates = []
+    for c in roster:
+        c_k = clean_core_key(c['name'])
+        if c_k.startswith(core_pdf) and len(core_pdf) >= 4:
+            prefix_candidates.append(c)
+
+    if len(prefix_candidates) == 1:
+        return prefix_candidates[0]['name'], prefix_candidates[0]['dept'] or norm_dept
+    elif len(prefix_candidates) > 1:
+        if norm_dept:
+            same_dept = [c for c in prefix_candidates if norm_dept in c.get('dept', '') or c.get('dept', '') in norm_dept]
+            if same_dept:
+                return same_dept[0]['name'], same_dept[0]['dept'] or norm_dept
+        return prefix_candidates[0]['name'], prefix_candidates[0]['dept'] or norm_dept
+
+    # 4. Fuzzy Match ด้วยความแม่นยำสูง (>= 80%)
+    best_c = None
+    best_score = 0
+    for c in roster:
+        c_k = clean_core_key(c['name'])
+        score = SequenceMatcher(None, core_pdf, c_k).ratio()
+        if score > best_score:
+            best_score = score
+            best_c = c
+
+    if best_score >= 0.80 and best_c:
+        return best_c['name'], best_c['dept'] or norm_dept
+
+    return norm_name, norm_dept
+
 def unify_names(df: pd.DataFrame) -> pd.DataFrame:
-    """รวมชื่อที่ต่างกันแค่ช่องว่าง (เช่น 'นาย สมชาย' กับ 'นายสมชาย') ให้เป็นชื่อเดียวกัน"""
-    key = df['ชื่อ-สกุล'].str.replace(r'\s+', '', regex=True)
-    canonical = df.groupby(key)['ชื่อ-สกุล'].agg(lambda s: s.value_counts().index[0])
+    """ทำความสะอาดชื่อ-สกุล กู้คืนนามสกุลที่ถูกตัดทอน (Truncated) และจัดหมวดหมู่ฝ่ายให้ถูกต้อง"""
+    if df.empty:
+        return df
+
     df = df.copy()
-    df['ชื่อ-สกุล'] = key.map(canonical)
+    df['ชื่อ-สกุล'] = df['ชื่อ-สกุล'].apply(normalize_thai_chars)
+    df['แผนก'] = df['แผนก'].apply(normalize_thai_chars)
+
+    repaired_cache = {}
+    def _repair_row(row):
+        n = row['ชื่อ-สกุล']
+        d = row['แผนก']
+        k = (n, d)
+        if k not in repaired_cache:
+            rep_name, rep_dept = repair_truncated_name(n, d)
+            repaired_cache[k] = (rep_name, rep_dept)
+        return repaired_cache[k]
+
+    rep_results = df.apply(_repair_row, axis=1)
+    df['ชื่อ-สกุล'] = [r[0] for r in rep_results]
+    df['แผนก'] = [r[1] for r in rep_results]
+
     # เติมแผนกที่ว่างจากแถวอื่นของคนเดียวกัน
-    dept_map = df[df['แผนก'] != ''].groupby('ชื่อ-สกุล')['แผนก'].agg(lambda s: s.value_counts().index[0])
-    df['แผนก'] = df.apply(lambda r: r['แผนก'] or dept_map.get(r['ชื่อ-สกุล'], ''), axis=1)
+    non_empty_dept = df[df['แผนก'] != '']
+    if not non_empty_dept.empty:
+        dept_map = non_empty_dept.groupby('ชื่อ-สกุล')['แผนก'].agg(lambda s: s.value_counts().index[0]).to_dict()
+        df['แผนก'] = df.apply(lambda r: r['แผนก'] or dept_map.get(r['ชื่อ-สกุล'], ''), axis=1)
+
     return df
 
 # -------------------------
@@ -971,12 +1120,14 @@ def unify_names(df: pd.DataFrame) -> pd.DataFrame:
 # -------------------------
 def clean_name(name):
     if not name or pd.isna(name): return ""
-    n = re.sub(r'\s+', '', str(name))
-    n = re.sub(r'^(นาย|นางสาว|นาง|น\.ส\.|ว่าที่ร้อยตรี|ว่าที่ร\.ต\.|ว่าที่|ดร\.|จ\.ส\.|พ\.จ\.|ร\.ต\.|ร\.ท\.|ร\.อ\.|น\.ต\.|น\.ท\.|น\.อ\.|พ\.ต\.|พ\.ท\.|พ\.อ\.|ด\.ต\.|ส\.ต\.|ส\.อ\.|จ\.ต\.|จ\.ท\.|จ\.อ\.)', '', n)
+    n = normalize_thai_chars(str(name))
+    n = re.sub(r'\s+', '', n)
+    n = re.sub(TITLES_PATTERN, '', n)
     return n
 
 def split_first_last(name):
-    cleaned = re.sub(r'^(นาย|นางสาว|นาง|น\.ส\.|ว่าที่ร้อยตรี|ว่าที่ร\.ต\.|ว่าที่|ดร\.|จ\.ส\.|พ\.จ\.|ร\.ต\.|ร\.ท\.|ร\.อ\.|น\.ต\.|น\.ท\.|น\.อ\.|พ\.ต\.|พ\.ท\.|พ\.อ\.|ด\.ต\.|ส\.ต\.|ส\.อ\.|จ\.ต\.|จ\.ท\.|จ\.อ\.)\s*', '', str(name)).strip()
+    cleaned = normalize_thai_chars(str(name))
+    cleaned = re.sub(TITLES_PATTERN, '', cleaned).strip()
     parts = cleaned.split()
     first = parts[0] if parts else ''
     last = ''.join(parts[1:]) if len(parts) > 1 else ''
@@ -1242,8 +1393,10 @@ with tab1:
             try:
                 leave_df_parsed = load_data(uploaded_leave)
                 st.session_state.leave_df = leave_df_parsed
+                enrich_canonical_roster_from_leave(leave_df_parsed)
                 st.success(f"✅ โหลดข้อมูลตารางวันลาสำเร็จ: {len(leave_df_parsed)} รายการ")
-                if 'master_df' in st.session_state:
+                if 'master_df' in st.session_state and st.session_state.master_df is not None:
+                    st.session_state.master_df = unify_names(st.session_state.master_df)
                     st.session_state.master_df = cross_check_attendance_with_leave(st.session_state.master_df, leave_df_parsed)
                     st.info("🔄 อัปเดตการตรวจเทียบวันลากับข้อมูลสแกนนิ้วเรียบร้อยแล้ว!")
             except Exception as e:
