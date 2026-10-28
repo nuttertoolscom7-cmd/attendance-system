@@ -1,4 +1,5 @@
 import os
+import calendar
 import hmac
 import streamlit as st
 import pandas as pd
@@ -378,10 +379,13 @@ def month_name_thai(month_num):
               "กรกฎาคม","สิงหาคม","กันยายน","ตุลาคม","พฤศจิกายน","ธันวาคม"]
     return months[month_num-1] if 1 <= month_num <= 12 else ""
 
+REPORT_DEPT_ORDER = ['ข้าราชการ', 'พนักงานราชการ', 'ลูกจ้างประจำ', 'ลูกจ้างชั่วคราว']
+THAI_DOW = ["จ", "อ", "พ", "พฤ", "ศ", "ส", "อา"]
+
 def get_department_options(df: pd.DataFrame):
     """ดึงรายชื่อฝ่าย/กลุ่มงานที่มีอยู่ใน DataFrame จัดเรียงตามมาตรฐาน"""
     existing = df['แผนก'].dropna().unique().tolist()
-    ordered = [d for d in DEPT_VARIANTS if d in existing]
+    ordered = [d for d in REPORT_DEPT_ORDER if d in existing]
     others = [d for d in existing if d and d not in DEPT_VARIANTS]
     ordered.extend(sorted(others))
     if '' in existing or df['แผนก'].isna().any():
@@ -396,27 +400,192 @@ def filter_by_dept(df: pd.DataFrame, selected_dept: str):
         return df[df['แผนก'].isin(['', None]) | df['แผนก'].isna()]
     return df[df['แผนก'] == selected_dept]
 
-def df_to_excel_bytes(pivot: pd.DataFrame, df_all: pd.DataFrame, dept_label: str = ""):
+def build_monthly_report_table(df_dept: pd.DataFrame, df_all: pd.DataFrame, exc_week: bool = True, exc_th: bool = True, extra_list: list = None):
+    """สร้างตารางรายงานประจำเดือนตามรูปแบบมาตรฐานศูนย์ฝึกพาณิชย์นาวี (หัวตาราง 2 ชั้น วันในสัปดาห์ + วันที่ 1..31)"""
+    if extra_list is None:
+        extra_list = []
+    valid_dates = df_all['วันที่'].dropna()
+    if valid_dates.empty:
+        return pd.DataFrame(), set(), 2026, 10
+    year = int(valid_dates.dt.year.mode()[0])
+    month = int(valid_dates.dt.month.mode()[0])
+    days_in_month = calendar.monthrange(year, month)[1]
+
+    df_month_all = df_all[(df_all['วันที่'].dt.year == year) & (df_all['วันที่'].dt.month == month)]
+    uploaded_days = set(df_month_all['วันที่'].dt.day.unique())
+    max_uploaded_day = max(uploaded_days) if uploaded_days else 0
+
+    holiday_days = set()
+    for d in range(1, days_in_month + 1):
+        dt_d = pd.Timestamp(year=year, month=month, day=d)
+        if is_it_holiday(dt_d, exc_week, exc_th, extra_list):
+            holiday_days.add(d)
+
+    emp_names = df_dept['ชื่อ-สกุล'].drop_duplicates().tolist()
+
+    df_dept_m = df_dept[(df_dept['วันที่'].dt.year == year) & (df_dept['วันที่'].dt.month == month)]
+    status_lookup = {}
+    for _, r in df_dept_m.iterrows():
+        d_num = int(r['วันที่'].day)
+        status_lookup[(r['ชื่อ-สกุล'], d_num)] = shorten_status_for_pivot(r['สถานะ'])
+
+    col_tuples = [('ที่', ''), ('ชื่อ - สกุล', '')]
+    for d in range(1, days_in_month + 1):
+        dt_d = pd.Timestamp(year=year, month=month, day=d)
+        dow_str = THAI_DOW[dt_d.weekday()]
+        col_tuples.append((dow_str, str(d)))
+
+    rows = []
+    for idx, name in enumerate(emp_names, start=1):
+        row_data = [idx, name]
+        for d in range(1, days_in_month + 1):
+            if (name, d) in status_lookup:
+                sym = status_lookup[(name, d)]
+            else:
+                if d <= max_uploaded_day and d in holiday_days:
+                    sym = " -"
+                elif d in uploaded_days:
+                    sym = "x"
+                else:
+                    sym = ""
+            row_data.append(sym)
+        rows.append(row_data)
+
+    columns = pd.MultiIndex.from_tuples(col_tuples)
+    report_df = pd.DataFrame(rows, columns=columns)
+    return report_df, holiday_days, year, month
+
+def style_monthly_report_table(report_df: pd.DataFrame, holiday_days: set):
+    """จัดสีตารางรายงานประจำเดือนให้เหมือนไฟล์ตัวอย่าง (คอลัมน์วันหยุดสีฟ้า #95B3D7 และสีตามสถานะ)"""
+    def style_col(col):
+        col_name = col.name
+        day_str = col_name[1] if isinstance(col_name, tuple) and len(col_name) > 1 else ""
+        is_hol_col = int(day_str) in holiday_days if str(day_str).isdigit() else False
+        styles = []
+        for val in col:
+            v = str(val).strip()
+            if col_name == ('ที่', ''):
+                styles.append("text-align: center; font-weight: 600;")
+            elif col_name == ('ชื่อ - สกุล', ''):
+                styles.append("text-align: left; font-weight: 500;")
+            elif is_hol_col:
+                if v == "✓":
+                    styles.append("background-color: #95B3D7; color: #006100; font-weight: 700; text-align: center;")
+                elif v in ["สาย", "เข้า", "ออก", "x"]:
+                    styles.append("background-color: #95B3D7; color: #9C0006; font-weight: 700; text-align: center;")
+                else:
+                    styles.append("background-color: #95B3D7; color: #1F3864; text-align: center;")
+            else:
+                if v == "✓":
+                    styles.append("color: #1E7E34; font-weight: 700; text-align: center;")
+                elif v == "สาย":
+                    styles.append("background-color: #FFEB9C; color: #9C6500; font-weight: 700; text-align: center;")
+                elif v in ["เข้า", "ออก"]:
+                    styles.append("background-color: #FCE4D6; color: #C65911; font-weight: 700; text-align: center;")
+                elif v == "x":
+                    styles.append("background-color: #FFC7CE; color: #9C0006; font-weight: 700; text-align: center;")
+                elif v == "-":
+                    styles.append("background-color: #95B3D7; color: #1F3864; text-align: center;")
+                elif v and v != "nan":
+                    styles.append("background-color: #D1ECF1; color: #0C5460; font-weight: 700; text-align: center;")
+                else:
+                    styles.append("text-align: center;")
+        return styles
+    return report_df.style.apply(style_col, axis=0)
+
+def df_to_excel_bytes(pivot: pd.DataFrame, df_all: pd.DataFrame, dept_label: str = "", exc_week: bool = True, exc_th: bool = True, extra_list: list = None):
+    """ส่งออกรายงานประจำเดือนเป็นไฟล์ Excel รูปแบบเดียวกับไฟล์ตัวอย่างของศูนย์ฝึกพาณิชย์นาวี (แยกชีตตามฝ่าย)"""
+    if extra_list is None:
+        extra_list = []
     output = BytesIO()
+    valid_dates = df_all['วันที่'].dropna()
+    year = int(valid_dates.dt.year.mode()[0]) if not valid_dates.empty else datetime.now().year
+    month = int(valid_dates.dt.month.mode()[0]) if not valid_dates.empty else datetime.now().month
+    days_in_month = calendar.monthrange(year, month)[1]
+    month_th = month_name_thai(month)
+    year_be = year + 543
+
+    # กำหนดรายการชีตที่จะสร้าง
+    if not dept_label or dept_label == "ทั้งหมด":
+        depts_to_export = [d for d in REPORT_DEPT_ORDER if d in df_all['แผนก'].values]
+        other_depts = [d for d in df_all['แผนก'].dropna().unique() if d and d not in REPORT_DEPT_ORDER]
+        depts_to_export.extend(other_depts)
+        if (df_all['แผนก'] == '').any() or df_all['แผนก'].isna().any():
+            depts_to_export.append("ไม่ระบุฝ่าย")
+        if not depts_to_export:
+            depts_to_export = ["ทั้งหมด"]
+    else:
+        depts_to_export = [dept_label]
+
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        pivot.to_excel(writer, sheet_name="Summary", startrow=2, index=True)
-        workbook  = writer.book
-        worksheet = writer.sheets["Summary"]
-        base_font = 'TH SarabunPSK' 
-        base_format = workbook.add_format({'font_name': base_font, 'font_size': 14, 'align': 'center', 'valign': 'bottom', 'border': 1})
-        name_format = workbook.add_format({'font_name': base_font, 'font_size': 14, 'align': 'left', 'valign': 'bottom', 'border': 1})
-        for row in range(len(pivot) + 3):
-            worksheet.set_row(row, 30, base_format)
-        worksheet.set_column(0, 0, 35, name_format) 
-        if len(pivot.columns) > 0:
-            worksheet.set_column(1, len(pivot.columns), 10, base_format)
-        valid_dates = df_all['วันที่'].dropna()
-        month_th = month_name_thai(int(valid_dates.dt.month.mode()[0])) if not valid_dates.empty else "ไม่ระบุ"
-        year_be = int(valid_dates.dt.year.mode()[0]) + 543 if not valid_dates.empty else ""
-        sub_dept = f" ({dept_label})" if dept_label and dept_label != "ทั้งหมด" else ""
-        header_text = f"รายงานการเข้า-ออกงาน{sub_dept} ประจำเดือน {month_th} {year_be}".strip()
-        merge_format = workbook.add_format({'bold': True, 'font_name': base_font, 'font_size': 18, 'align': 'center', 'valign': 'bottom'})
-        worksheet.merge_range(0, 0, 0, len(pivot.columns), header_text, merge_format)
+        workbook = writer.book
+        base_font = 'TH SarabunPSK'
+        sym_font = 'Calibri'
+        hol_bg = '#95B3D7'
+
+        title_fmt = workbook.add_format({'bold': True, 'font_name': base_font, 'font_size': 18, 'align': 'center', 'valign': 'vcenter'})
+        subtitle_fmt = workbook.add_format({'bold': True, 'font_name': base_font, 'font_size': 18, 'align': 'center', 'valign': 'vcenter', 'bottom': 1})
+        hdr_fmt = workbook.add_format({'bold': True, 'font_name': base_font, 'font_size': 18, 'align': 'center', 'valign': 'vcenter', 'border': 1})
+        hdr_hol_fmt = workbook.add_format({'bold': True, 'font_name': base_font, 'font_size': 18, 'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': hol_bg})
+        idx_fmt = workbook.add_format({'font_name': base_font, 'font_size': 18, 'align': 'center', 'valign': 'vcenter', 'border': 1})
+        name_fmt = workbook.add_format({'font_name': base_font, 'font_size': 14, 'align': 'left', 'valign': 'vcenter', 'border': 1})
+        cell_fmt = workbook.add_format({'font_name': sym_font, 'font_size': 11, 'align': 'center', 'valign': 'vcenter', 'border': 1})
+        cell_hol_fmt = workbook.add_format({'font_name': sym_font, 'font_size': 11, 'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': hol_bg})
+        legend_fmt = workbook.add_format({'font_name': base_font, 'font_size': 18, 'align': 'left', 'valign': 'vcenter'})
+
+        for d_name in depts_to_export:
+            df_sub = filter_by_dept(df_all, d_name)
+            rep_df, holiday_days, _, _ = build_monthly_report_table(df_sub, df_all, exc_week, exc_th, extra_list)
+            sheet_title = d_name[:31] if d_name else "Summary"
+            ws = workbook.add_worksheet(sheet_title)
+
+            last_day_col = 1 + days_in_month  # Col B is 1, Day 1 is 2 .. Day 31 is 32 (AG)
+            dept_header_name = f"{d_name}ศูนย์ฝึกพาณิชย์นาวี" if d_name != "ทั้งหมด" else "เจ้าหน้าที่ศูนย์ฝึกพาณิชย์นาวี"
+
+            # Row 1 & Row 2: Title and Month
+            ws.set_row(0, 23.25)
+            ws.set_row(1, 23.25)
+            ws.merge_range(0, 1, 0, last_day_col, dept_header_name, title_fmt)
+            ws.merge_range(1, 1, 1, last_day_col, f"ประจำเดือน {month_th} {year_be}", subtitle_fmt)
+
+            # Row 3 & Row 4: Table Headers
+            ws.set_row(2, 23.25)
+            ws.set_row(3, 18.0)
+            ws.merge_range(2, 0, 3, 0, "ที่", hdr_fmt)
+            ws.merge_range(2, 1, 3, 1, "ชื่อ - สกุล", hdr_fmt)
+
+            for d in range(1, days_in_month + 1):
+                col_idx = 1 + d
+                dt_d = pd.Timestamp(year=year, month=month, day=d)
+                dow_str = THAI_DOW[dt_d.weekday()]
+                h_fmt = hdr_hol_fmt if d in holiday_days else hdr_fmt
+                ws.write(2, col_idx, dow_str, h_fmt)
+                ws.write(3, col_idx, d, h_fmt)
+
+            # Legend on right (Col AI = last_day_col + 2)
+            legend_col = last_day_col + 2
+            ws.write(2, legend_col, "x X (เข้า-ออก)", legend_fmt)
+            ws.write(3, legend_col, " - วันหยุดราชการ", legend_fmt)
+
+            # Data rows (Row 5+)
+            for r_i, row_vals in enumerate(rep_df.values):
+                excel_row = 4 + r_i
+                ws.set_row(excel_row, 17.25)
+                ws.write(excel_row, 0, int(row_vals[0]), idx_fmt)
+                ws.write(excel_row, 1, str(row_vals[1]), name_fmt)
+                for d in range(1, days_in_month + 1):
+                    col_idx = 1 + d
+                    val = row_vals[1 + d]
+                    c_fmt = cell_hol_fmt if d in holiday_days else cell_fmt
+                    ws.write(excel_row, col_idx, val if val != "" else None, c_fmt)
+
+            # Column widths matching original template
+            ws.set_column(0, 0, 4.0)
+            ws.set_column(1, 1, 28.0)
+            ws.set_column(2, last_day_col, 4.8)
+            ws.set_column(last_day_col + 1, last_day_col + 1, 3.0)
+            ws.set_column(legend_col, legend_col, 21.0)
+
     return output.getvalue()
 
 def daily_to_excel_bytes(df_day: pd.DataFrame, report_date, dept_label: str = ""):
@@ -834,24 +1003,34 @@ def is_name_match(n1, n2):
     return False
 
 def shorten_status_for_pivot(val):
+    """แปลงสถานะเป็นสัญลักษณ์มาตรฐานของรายงานศูนย์ฝึกพาณิชย์นาวี (✓, สาย, เข้า, ออก, x, -, ป, พ, ก)"""
     if not val or pd.isna(val): return ""
     v = str(val).strip()
-    mapping = {
-        "ปกติ": "ปกติ",
-        "สาย (มีใบขออนุญาต)": "สาย(อนุญาต)",
-        "สาย": "สาย",
-        "ขาดงาน": "ขาด",
-        "วันหยุด": "หยุด",
-        "ลืมสแกนนิ้วเข้า": "ลืมเข้า",
-        "ลืมสแกนนิ้วออก": "ลืมออก",
-        "ลาป่วย (มีใบลา)": "ลาป่วย",
-        "ลากิจ (มีใบลา)": "ลากิจ",
-        "ลาพักผ่อน (มีใบลา)": "พักผ่อน",
-        "ลาป่วย (ครึ่งวัน)": "ป่วย(ครึ่ง)",
-        "ลากิจ (ครึ่งวัน)": "กิจ(ครึ่ง)",
-        "ลาพักผ่อน (ครึ่งวัน)": "พัก(ครึ่ง)"
-    }
-    return mapping.get(v, v)
+    if v in ["ปกติ", "✓"]:
+        return "✓"
+    if v in ["สาย", "สาย (มีใบขออนุญาต)", "สาย(อนุญาต)"]:
+        return "สาย"
+    if v in ["ลืมสแกนนิ้วเข้า", "ลืมเข้า", "เข้า"]:
+        return "เข้า"
+    if v in ["ลืมสแกนนิ้วออก", "ลืมออก", "ออก"]:
+        return "ออก"
+    if v in ["ขาดงาน", "ขาด", "x", "X"]:
+        return "x"
+    if v in ["วันหยุด", "หยุด", "-", " -"]:
+        return " -"
+    if "ราชการ" in v:
+        return "ราชการ"
+    short_map = {"ลาป่วย": "ป", "ลาพักผ่อน": "พ", "ลากิจ": "ก"}
+    for full_t, code in short_map.items():
+        if full_t in v:
+            if "ครึ่งบ่าย" in v or "(บ)" in v:
+                return f"{code}(บ)"
+            if "ครึ่งเช้า" in v or "(ช)" in v:
+                return f"{code}(ช)"
+            if "ครึ่ง" in v:
+                return f"{code}(ครึ่ง)"
+            return code
+    return v
 
 def cross_check_attendance_with_leave(attendance_df: pd.DataFrame, leave_df: pd.DataFrame) -> pd.DataFrame:
     df = attendance_df.copy()
@@ -897,23 +1076,29 @@ def cross_check_attendance_with_leave(attendance_df: pd.DataFrame, leave_df: pd.
             leave_type_col.append(l_type)
             leave_remark_col.append(remark)
             
+            half_tag = "ครึ่งวัน"
+            if "บ่าย" in remark or "(บ)" in remark or (cur_status == 'ลืมสแกนนิ้วออก' and is_half):
+                half_tag = "ครึ่งบ่าย"
+            elif "เช้า" in remark or "(ช)" in remark or (cur_status == 'ลืมสแกนนิ้วเข้า' and is_half):
+                half_tag = "ครึ่งเช้า"
+
             if cur_status == 'ขาดงาน':
                 if is_half:
-                    updated_status_col.append(f"{l_type} (ครึ่งวัน)")
+                    updated_status_col.append(f"{l_type} ({half_tag})")
                 else:
                     updated_status_col.append(f"{l_type} (มีใบลา)")
             elif cur_status in ['ลืมสแกนนิ้วเข้า', 'ลืมสแกนนิ้วออก']:
                 if l_type == 'สาย':
                     updated_status_col.append('สาย (มีใบขออนุญาต)')
                 elif is_half:
-                    updated_status_col.append(f"{l_type} (ครึ่งวัน)")
+                    updated_status_col.append(f"{l_type} ({half_tag})")
                 else:
                     updated_status_col.append(f"{l_type} (มีใบลา)")
             elif cur_status == 'สาย':
                 if l_type == 'สาย':
                     updated_status_col.append('สาย (มีใบขออนุญาต)')
                 elif is_half:
-                    updated_status_col.append(f"{l_type} (ครึ่งวัน)")
+                    updated_status_col.append(f"{l_type} ({half_tag})")
                 else:
                     updated_status_col.append(f"{l_type} (มีใบลา)")
             else:
@@ -1204,17 +1389,51 @@ if 'master_df' in st.session_state:
         c_m4.metric("🏖️ มีใบลาถูกต้อง", f"{m_leave_count} คน")
         st.markdown("---")
 
-        df_month_p = df_month.copy()
-        df_month_p['day'] = df_month_p['วันที่'].dt.day
-        df_month_p['short_status'] = df_month_p['สถานะ'].apply(shorten_status_for_pivot)
-        pivot = df_month_p.pivot_table(index="ชื่อ-สกุล", columns="day", values="short_status", aggfunc="first").fillna("")
-        st.dataframe(style_status_table(pivot), use_container_width=True)
+        valid_m_dates = master_df['วันที่'].dropna()
+        rep_month_th = month_name_thai(int(valid_m_dates.dt.month.mode()[0])) if not valid_m_dates.empty else ""
+        rep_year_be = int(valid_m_dates.dt.year.mode()[0]) + 543 if not valid_m_dates.empty else ""
+
+        st.markdown(f"### 📋 ตารางรายงานประจำเดือน {rep_month_th} {rep_year_be} (รูปแบบมาตรฐานศูนย์ฝึกพาณิชย์นาวี)")
+        st.markdown(
+            '<div style="display:flex; flex-wrap:wrap; gap:10px; background:#FFFDF9; border:1px solid #EAE1D3; border-radius:14px; padding:10px 16px; margin-bottom:14px; font-size:0.88rem;">'
+            '<span><b>คำอธิบายสัญลักษณ์:</b></span>'
+            '<span style="color:#1E7E34; font-weight:700;">✓ = ปกติ</span> | '
+            '<span style="background:#FFEB9C; color:#9C6500; padding:1px 8px; border-radius:6px; font-weight:600;">สาย = มาสาย</span> | '
+            '<span style="background:#FCE4D6; color:#C65911; padding:1px 8px; border-radius:6px; font-weight:600;">เข้า = ลืมสแกนเข้า</span> | '
+            '<span style="background:#FCE4D6; color:#C65911; padding:1px 8px; border-radius:6px; font-weight:600;">ออก = ลืมสแกนออก</span> | '
+            '<span style="background:#FFC7CE; color:#9C0006; padding:1px 8px; border-radius:6px; font-weight:600;">x = ขาดงาน (เข้า-ออก)</span> | '
+            '<span style="background:#95B3D7; color:#1F3864; padding:1px 8px; border-radius:6px; font-weight:600;">- = วันหยุดราชการ</span> | '
+            '<span style="background:#D1ECF1; color:#0C5460; padding:1px 8px; border-radius:6px; font-weight:600;">ป / พ / ก = ลาป่วย / พักผ่อน / ลากิจ</span>'
+            '</div>',
+            unsafe_allow_html=True
+        )
+
+        if sel_dept_month == "ทั้งหมด":
+            avail_depts = [d for d in REPORT_DEPT_ORDER if d in master_df['แผนก'].values]
+            if not avail_depts:
+                avail_depts = ["ทั้งหมด"]
+            dept_tabs = st.tabs([f"🏛️ {d} ({master_df[master_df['แผนก']==d]['ชื่อ-สกุล'].nunique()} คน)" for d in avail_depts])
+            for d_tab, d_name in zip(dept_tabs, avail_depts):
+                with d_tab:
+                    st.markdown(f"<div style='text-align:center; font-weight:700; font-size:1.15rem; margin-bottom:8px;'>{d_name}ศูนย์ฝึกพาณิชย์นาวี — ประจำเดือน {rep_month_th} {rep_year_be}</div>", unsafe_allow_html=True)
+                    df_d_sub = filter_by_dept(master_df, d_name)
+                    rep_df, hol_days, _, _ = build_monthly_report_table(df_d_sub, master_df, exclude_weekends, exclude_th_holidays, extra_holidays)
+                    st.dataframe(style_monthly_report_table(rep_df, hol_days), use_container_width=True, hide_index=True)
+        else:
+            st.markdown(f"<div style='text-align:center; font-weight:700; font-size:1.15rem; margin-bottom:8px;'>{sel_dept_month}ศูนย์ฝึกพาณิชย์นาวี — ประจำเดือน {rep_month_th} {rep_year_be}</div>", unsafe_allow_html=True)
+            rep_df, hol_days, _, _ = build_monthly_report_table(df_month, master_df, exclude_weekends, exclude_th_holidays, extra_holidays)
+            st.dataframe(style_monthly_report_table(rep_df, hol_days), use_container_width=True, hide_index=True)
 
         dept_month_tag = f"_{sel_dept_month}" if sel_dept_month != "ทั้งหมด" else ""
         col_dl1, col_dl2 = st.columns(2)
         with col_dl1:
-            dl_sum_label = "📥 ดาวน์โหลดสรุปรวม (Excel)" + (f" - {sel_dept_month}" if sel_dept_month != "ทั้งหมด" else "")
-            st.download_button(dl_sum_label, df_to_excel_bytes(pivot, df_month, sel_dept_month), f"monthly_summary{dept_month_tag}.xlsx", use_container_width=True)
+            dl_sum_label = "📥 ดาวน์โหลดรายงานประจำเดือน (Excel รูปแบบมาตรฐาน 4 ชีต)" if sel_dept_month == "ทั้งหมด" else f"📥 ดาวน์โหลดรายงานประจำเดือน (Excel) - {sel_dept_month}"
+            st.download_button(
+                dl_sum_label,
+                df_to_excel_bytes(pd.DataFrame(), master_df, sel_dept_month, exclude_weekends, exclude_th_holidays, extra_holidays),
+                f"ประจำเดือน{rep_month_th}_{rep_year_be}{dept_month_tag}.xlsx",
+                use_container_width=True
+            )
         with col_dl2:
             dl_missing_label = "📥 ดาวน์โหลดรายงานลืมสแกน/ขาดงานจริง (Excel)" + (f" - {sel_dept_month}" if sel_dept_month != "ทั้งหมด" else "")
             st.download_button(dl_missing_label, missing_scan_to_excel_bytes(df_month, sel_dept_month), f"missing_scans_report{dept_month_tag}.xlsx", use_container_width=True)
