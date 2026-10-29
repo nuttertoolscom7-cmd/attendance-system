@@ -20,30 +20,50 @@ from data_parser import load_data
 # ตั้งค่าหน้าเว็บและ CSS
 # -------------------------
 
-# ฉีด CSS ดีไซน์ Playful Modern อบอุ่น สไตล์ Sonnenbloom (แก้สระลอย + ปรับแต่ง UI ครบวงจร)
+# ฉีด CSS ดีไซน์ Authentic "Notebook" Stationery Style (กระดาษสมุดมีเส้นบรรทัด + เส้นกั้นหน้าสีชมพู + กระดาษโน้ต Sticky Notes + Washi Tape)
 st.markdown("""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700&family=Sarabun:wght@300;400;500;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Caveat:wght@500;600;700&family=Kalam:wght@400;700&family=Mali:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Sarabun:wght@300;400;500;600;700&family=Prompt:wght@400;500;600;700&display=swap');
 
+    /* Global Study Desk & Graph Paper Background */
     html, body, [class*="css"], .stApp {
-        font-family: 'Prompt', 'Sarabun', sans-serif !important;
-        background-color: #FDFBF7 !important;
-        color: #2D2825 !important;
+        font-family: 'Sarabun', 'Prompt', sans-serif !important;
+        background-color: #fcfbf7 !important;
+        background-image:
+            linear-gradient(to right, rgba(229, 231, 235, 0.55) 1px, transparent 1px),
+            linear-gradient(to bottom, rgba(229, 231, 235, 0.55) 1px, transparent 1px) !important;
+        background-size: 24px 24px !important;
+        color: #1e293b !important;
     }
 
+    /* Sidebar: Lined Notebook Margin & Paper */
     [data-testid="stSidebar"] {
-        background-color: #F8F3EA !important;
-        border-right: 1.5px solid #EAE1D3 !important;
+        background-color: #f7f4eb !important;
+        background-image: repeating-linear-gradient(
+            transparent,
+            transparent 27px,
+            #e5e7eb 27px,
+            #e5e7eb 28px
+        ) !important;
+        border-right: 3px double #fca5a5 !important;
+        box-shadow: 4px 0 15px rgba(0, 0, 0, 0.04) !important;
     }
     [data-testid="stSidebarNav"] span {
-        font-family: 'Prompt', sans-serif !important;
-        font-weight: 500 !important;
+        font-family: 'Mali', 'Prompt', sans-serif !important;
+        font-weight: 600 !important;
+        color: #1e293b !important;
     }
 
     h1, h2, h3, h4, h5, h6 {
-        font-family: 'Prompt', sans-serif !important;
+        font-family: 'Prompt', 'Sarabun', sans-serif !important;
         font-weight: 700 !important;
-        color: #2D2825 !important;
+        color: #1e293b !important;
+    }
+
+    .stCaption, caption, small {
+        font-family: 'Caveat', 'Kalam', 'Mali', cursive !important;
+        font-size: 1.02rem !important;
+        color: #475569 !important;
     }
 
     .stMarkdown, .stTable, .stDataFrame, td, th {
@@ -51,72 +71,122 @@ st.markdown("""
         line-height: 1.6 !important;
     }
 
-    /* Custom Header Banner */
+    /* Custom Header Banner: Authentic Ruled Notebook Sheet with Pink Margin & Washi Tape */
     .att-header-container {
-        background: linear-gradient(135deg, #FFF6EE 0%, #FEF1DE 45%, #F5F9F4 100%);
-        border: 2px solid #F5E6D3;
-        border-radius: 24px;
-        padding: 26px 30px;
-        margin-bottom: 22px;
-        box-shadow: 0 12px 30px -10px rgba(233, 125, 50, 0.12);
+        background-color: #fcfbf7;
+        background-image:
+            linear-gradient(90deg, transparent 52px, #fca5a5 52px, #fca5a5 54px, transparent 54px, transparent 58px, rgba(252, 165, 165, 0.45) 58px, rgba(252, 165, 165, 0.45) 59px, transparent 59px),
+            repeating-linear-gradient(transparent, transparent 30px, #e5e7eb 30px, #e5e7eb 31px);
+        border: 1.5px solid #d1d5db;
+        border-radius: 6px 16px 16px 6px;
+        padding: 30px 30px 26px 76px;
+        margin-top: 14px;
+        margin-bottom: 26px;
+        position: relative;
+        box-shadow:
+            0 1px 1px rgba(0,0,0,0.08),
+            0 8px 0 -4px #f8f6f0,
+            0 8px 1px -3px rgba(0,0,0,0.12),
+            0 16px 0 -8px #f3f0e6,
+            0 16px 1px -7px rgba(0,0,0,0.12),
+            0 14px 28px rgba(15, 23, 42, 0.07);
+    }
+
+    /* Washi Tape Top Accent */
+    .att-header-container::before {
+        content: "";
+        position: absolute;
+        top: -12px;
+        left: 48%;
+        transform: translateX(-50%) rotate(-1.5deg);
+        width: 155px;
+        height: 26px;
+        background: rgba(254, 249, 195, 0.9);
+        border-left: 2px dotted rgba(234, 179, 8, 0.5);
+        border-right: 2px dotted rgba(234, 179, 8, 0.5);
+        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.08);
+        z-index: 2;
+    }
+
+    /* Binder Holes on Left Margin */
+    .att-header-container::after {
+        content: "";
+        position: absolute;
+        top: 22px;
+        bottom: 22px;
+        left: 18px;
+        width: 16px;
+        background-image: radial-gradient(circle, #e5e7eb 5.5px, rgba(0,0,0,0.12) 6.5px, transparent 7.5px);
+        background-size: 16px 52px;
+        background-repeat: repeat-y;
+        pointer-events: none;
     }
 
     .att-pill-badge {
         display: inline-flex;
         align-items: center;
         gap: 6px;
-        padding: 5px 14px;
-        background: #FFFFFF;
-        border: 1px solid #F0D7C2;
-        border-radius: 9999px;
-        font-size: 0.82rem;
-        font-weight: 600;
-        color: #D4661B;
-        box-shadow: 0 2px 6px rgba(212, 102, 27, 0.08);
+        padding: 4px 14px;
+        background: #fce7f3;
+        border: 1px solid #f9a8d4;
+        border-radius: 3px;
+        font-family: 'Caveat', 'Kalam', 'Mali', cursive !important;
+        font-size: 1.08rem;
+        font-weight: 700;
+        color: #9d174d;
+        box-shadow: 2px 2px 6px rgba(0, 0, 0, 0.07);
+        transform: rotate(-1deg);
         margin-bottom: 10px;
     }
 
     .att-header-title {
         font-size: 1.85rem !important;
         font-weight: 700 !important;
-        color: #2D2825 !important;
+        color: #1e293b !important;
         margin: 0 0 6px 0 !important;
     }
 
     .att-header-sub {
-        font-size: 0.98rem;
-        color: #6E655E;
+        font-family: 'Mali', 'Sarabun', sans-serif !important;
+        font-size: 0.96rem;
+        color: #475569;
         margin: 0;
     }
 
+    /* Sticky Note Status Badges */
     .status-badge-ready {
         display: inline-flex;
         align-items: center;
         gap: 8px;
-        background: #E8F5E9;
-        border: 1.5px solid #C8E6C9;
-        color: #2E7D32;
-        padding: 8px 18px;
-        border-radius: 9999px;
+        background: #fef9c3;
+        border: 1px solid #fde047;
+        border-bottom-right-radius: 16px 4px;
+        color: #1e293b;
+        padding: 10px 18px;
+        font-family: 'Mali', 'Sarabun', sans-serif !important;
         font-weight: 600;
-        font-size: 0.88rem;
-        box-shadow: 0 2px 8px rgba(46, 125, 50, 0.1);
+        font-size: 0.9rem;
+        box-shadow: 2px 4px 8px rgba(0, 0, 0, 0.08);
+        transform: rotate(1.5deg);
     }
 
     .status-badge-empty {
         display: inline-flex;
         align-items: center;
         gap: 8px;
-        background: #F8F5EE;
-        border: 1.5px solid #EAE1D3;
-        color: #7A7067;
-        padding: 8px 18px;
-        border-radius: 9999px;
+        background: #fce7f3;
+        border: 1px solid #f9a8d4;
+        border-bottom-right-radius: 16px 4px;
+        color: #831843;
+        padding: 10px 18px;
+        font-family: 'Mali', 'Sarabun', sans-serif !important;
         font-weight: 600;
-        font-size: 0.88rem;
+        font-size: 0.9rem;
+        box-shadow: 2px 4px 8px rgba(0, 0, 0, 0.08);
+        transform: rotate(-1deg);
     }
 
-    /* Custom Streamlit Tabs (Pill Segmented Control) */
+    /* Custom Streamlit Tabs: Notebook Divider Index Tabs */
     div[data-testid="stTabs"] {
         margin-top: 8px;
         margin-bottom: 24px;
@@ -124,151 +194,208 @@ st.markdown("""
 
     div[data-baseweb="tab-list"] {
         gap: 8px !important;
-        background-color: #F4EFE6 !important;
-        padding: 6px !important;
-        border-radius: 9999px !important;
-        border: 1px solid #EAE1D3 !important;
-        display: inline-flex !important;
+        background-color: transparent !important;
+        padding: 6px 4px 0 4px !important;
+        border-bottom: 2px solid #fca5a5 !important;
+        border-radius: 0 !important;
+        display: flex !important;
         flex-wrap: wrap !important;
     }
 
     button[data-baseweb="tab"] {
-        border-radius: 9999px !important;
-        padding: 8px 18px !important;
-        font-family: 'Prompt', sans-serif !important;
-        font-weight: 500 !important;
+        border-radius: 10px 10px 0 0 !important;
+        padding: 9px 18px !important;
+        font-family: 'Mali', 'Prompt', sans-serif !important;
+        font-weight: 600 !important;
         font-size: 0.92rem !important;
-        color: #6B625B !important;
-        background-color: transparent !important;
-        border: none !important;
-        transition: all 0.25s cubic-bezier(0.25, 0.8, 0.25, 1) !important;
+        color: #475569 !important;
+        background-color: #fcfbf7 !important;
+        border: 1.5px solid #d1d5db !important;
+        border-bottom: none !important;
+        box-shadow: 0 -2px 5px rgba(0,0,0,0.03) !important;
+        transition: all 0.2s ease !important;
+    }
+
+    button[data-baseweb="tab"]:nth-child(odd) {
+        background-color: #fefce8 !important;
+    }
+
+    button[data-baseweb="tab"]:nth-child(even) {
+        background-color: #fdf2f8 !important;
     }
 
     button[data-baseweb="tab"]:hover {
-        color: #E97D32 !important;
-        background-color: rgba(255, 255, 255, 0.7) !important;
+        color: #e11d48 !important;
+        transform: translateY(-2px) !important;
     }
 
     button[data-baseweb="tab"][aria-selected="true"] {
-        background: linear-gradient(135deg, #FF8E42 0%, #E97D32 100%) !important;
-        color: #FFFFFF !important;
-        font-weight: 600 !important;
-        box-shadow: 0 4px 14px rgba(233, 125, 50, 0.35) !important;
+        background: #fef9c3 !important;
+        color: #1e293b !important;
+        font-weight: 700 !important;
+        border: 2px solid #fca5a5 !important;
+        border-bottom: none !important;
+        box-shadow: 0 -3px 10px rgba(252, 165, 165, 0.25) !important;
+        transform: translateY(-2px) !important;
     }
 
     div[data-baseweb="tab-border"], div[data-baseweb="tab-highlight"] {
         display: none !important;
     }
 
-    /* Metric Cards */
+    /* Metric Cards: Pastel Sticky Notes with Washi Tape */
     div[data-testid="stMetric"] {
-        background: #FFFFFF !important;
-        border: 1.5px solid #EFE6DA !important;
-        border-radius: 20px !important;
-        padding: 18px 20px !important;
-        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.03) !important;
-        transition: all 0.25s cubic-bezier(0.25, 0.8, 0.25, 1) !important;
+        background: #fef9c3 !important;
+        border: 1px solid #fde047 !important;
+        border-radius: 3px 3px 18px 3px !important;
+        padding: 20px 18px 16px 18px !important;
+        box-shadow: 3px 5px 12px rgba(0, 0, 0, 0.08) !important;
+        position: relative !important;
+        transition: all 0.25s ease !important;
+        margin-top: 8px !important;
+    }
+
+    /* Washi tape strip on top of every Metric Sticky Note */
+    div[data-testid="stMetric"]::before {
+        content: "";
+        position: absolute;
+        top: -9px;
+        left: 50%;
+        transform: translateX(-50%) rotate(-1.5deg);
+        width: 64px;
+        height: 18px;
+        background: rgba(255, 255, 255, 0.65);
+        border: 1px solid rgba(203, 213, 225, 0.6);
+        box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+    }
+
+    div[data-testid="stHorizontalBlock"] > div:nth-of-type(even) div[data-testid="stMetric"] {
+        background: #fce7f3 !important;
+        border-color: #f9a8d4 !important;
+        transform: rotate(0.7deg) !important;
+    }
+
+    div[data-testid="stHorizontalBlock"] > div:nth-of-type(odd) div[data-testid="stMetric"] {
+        transform: rotate(-0.6deg) !important;
     }
 
     div[data-testid="stMetric"]:hover {
-        transform: translateY(-5px) !important;
-        box-shadow: 0 12px 28px -4px rgba(233, 125, 50, 0.16) !important;
-        border-color: #E97D32 !important;
+        transform: translateY(-5px) rotate(0deg) !important;
+        box-shadow: 5px 12px 22px rgba(0, 0, 0, 0.12) !important;
     }
 
     div[data-testid="stMetricLabel"] {
-        font-family: 'Prompt', sans-serif !important;
-        font-size: 0.95rem !important;
-        font-weight: 600 !important;
-        color: #6B625B !important;
+        font-family: 'Mali', 'Prompt', sans-serif !important;
+        font-size: 0.92rem !important;
+        font-weight: 700 !important;
+        color: #334155 !important;
     }
 
     div[data-testid="stMetricValue"] {
-        font-family: 'Prompt', 'Sarabun', sans-serif !important;
-        font-size: 2rem !important;
+        font-family: 'Caveat', 'Kalam', 'Prompt', sans-serif !important;
+        font-size: 2.15rem !important;
         font-weight: 700 !important;
-        color: #2D2825 !important;
+        color: #1e293b !important;
     }
 
-    /* Custom Buttons */
+    /* Custom Buttons: Stationery Stamp Style */
     div.stButton > button {
-        border-radius: 9999px !important;
-        font-family: 'Prompt', sans-serif !important;
-        font-weight: 600 !important;
-        font-size: 0.98rem !important;
+        border-radius: 6px !important;
+        font-family: 'Mali', 'Prompt', sans-serif !important;
+        font-weight: 700 !important;
+        font-size: 0.96rem !important;
         padding: 10px 24px !important;
-        transition: all 0.25s ease !important;
+        background-color: #fef9c3 !important;
+        color: #1e293b !important;
+        border: 2px solid #1e293b !important;
+        box-shadow: 3px 3px 0px #1e293b !important;
+        transition: all 0.18s ease !important;
     }
 
     div.stButton > button:hover {
-        transform: translateY(-2px) scale(1.01) !important;
+        transform: translate(-1px, -1px) !important;
+        box-shadow: 5px 5px 0px #e11d48 !important;
+        border-color: #e11d48 !important;
     }
 
     div.stDownloadButton > button {
-        border-radius: 9999px !important;
-        font-family: 'Prompt', sans-serif !important;
-        font-weight: 600 !important;
-        font-size: 0.95rem !important;
+        border-radius: 6px !important;
+        font-family: 'Mali', 'Prompt', sans-serif !important;
+        font-weight: 700 !important;
+        font-size: 0.94rem !important;
         padding: 10px 22px !important;
-        border: 1.5px solid #EFE6DA !important;
-        background: #FFFFFF !important;
-        color: #2D2825 !important;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.04) !important;
-        transition: all 0.25s ease !important;
+        border: 2px solid #1e293b !important;
+        background: #fce7f3 !important;
+        color: #1e293b !important;
+        box-shadow: 3px 3px 0px #1e293b !important;
+        transition: all 0.18s ease !important;
     }
 
     div.stDownloadButton > button:hover {
-        background: #FFF6EE !important;
-        border-color: #E97D32 !important;
-        color: #D4661B !important;
-        transform: translateY(-2px) !important;
+        background: #fef9c3 !important;
+        border-color: #e11d48 !important;
+        color: #1e293b !important;
+        transform: translate(-1px, -1px) !important;
+        box-shadow: 5px 5px 0px #e11d48 !important;
     }
 
-    /* File Uploaders */
+    /* File Uploaders: Ruled Notepad Cutout */
     div[data-testid="stFileUploaderDropzone"] {
-        border: 2px dashed #E28743 !important;
-        background: #FFFCF8 !important;
-        border-radius: 20px !important;
+        border: 2px dashed #fca5a5 !important;
+        background-color: #fcfbf7 !important;
+        background-image: repeating-linear-gradient(
+            transparent,
+            transparent 25px,
+            #e5e7eb 25px,
+            #e5e7eb 26px
+        ) !important;
+        border-radius: 10px !important;
         padding: 22px !important;
+        box-shadow: inset 0 0 0 4px #fcfbf7, 2px 4px 10px rgba(0,0,0,0.04) !important;
         transition: all 0.25s ease !important;
     }
 
     div[data-testid="stFileUploaderDropzone"]:hover {
-        background: #FFF5EC !important;
-        border-color: #D4661B !important;
+        background-color: #fefce8 !important;
+        border-color: #e11d48 !important;
     }
 
-    /* Dataframe containers */
+    /* Dataframe containers: Notebook Paper Table Frame */
     div[data-testid="stDataFrame"] {
-        border-radius: 18px !important;
+        border-radius: 8px !important;
         overflow: hidden !important;
-        border: 1.5px solid #EFE6DA !important;
-        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.03) !important;
+        border: 1.5px solid #cbd5e1 !important;
+        border-left: 4px solid #fca5a5 !important;
+        background: #fcfbf7 !important;
+        box-shadow: 3px 5px 14px rgba(15, 23, 42, 0.05) !important;
     }
 
-    /* Score Badge */
+    /* Score Badge: Sticky Note Stamp */
     .score-badge {
         display: inline-block;
-        padding: 6px 16px;
-        border-radius: 9999px;
-        font-weight: 600;
-        font-size: 0.92rem;
+        padding: 7px 18px;
+        border-radius: 4px;
+        font-family: 'Mali', 'Prompt', sans-serif !important;
+        font-weight: 700;
+        font-size: 0.94rem;
         margin-top: 8px;
+        box-shadow: 2px 3px 7px rgba(0,0,0,0.08);
+        transform: rotate(-0.8deg);
     }
     .score-high {
-        background: #E8F5E9;
-        color: #2E7D32;
-        border: 1px solid #C8E6C9;
+        background: #dcfce7;
+        color: #166534;
+        border: 1.5px solid #86efac;
     }
     .score-med {
-        background: #FFF8E1;
-        color: #F57F17;
-        border: 1px solid #FFE082;
+        background: #fef9c3;
+        color: #854d0e;
+        border: 1.5px solid #fde047;
     }
     .score-low {
-        background: #FFEBEE;
-        color: #C62828;
-        border: 1px solid #FFCDD2;
+        background: #fce7f3;
+        color: #9d174d;
+        border: 1.5px solid #f9a8d4;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -1570,7 +1697,7 @@ if 'master_df' in st.session_state:
 
         st.markdown(f"### 📋 ตารางรายงานประจำเดือน {rep_month_th} {rep_year_be} (รูปแบบมาตรฐานศูนย์ฝึกพาณิชย์นาวี)")
         st.markdown(
-            '<div style="display:flex; flex-wrap:wrap; gap:10px; background:#FFFDF9; border:1px solid #EAE1D3; border-radius:14px; padding:10px 16px; margin-bottom:14px; font-size:0.88rem;">'
+            '<div style="display:flex; flex-wrap:wrap; gap:10px; background:#fcfbf7; border:1.5px solid #d1d5db; border-left:5px solid #fca5a5; border-radius:6px; padding:12px 18px; margin-bottom:14px; font-size:0.9rem; box-shadow:2px 3px 8px rgba(0,0,0,0.04);">'
             '<span><b>คำอธิบายสัญลักษณ์:</b></span>'
             '<span style="color:#1E7E34; font-weight:700;">✓ = ปกติ</span> | '
             '<span style="background:#FFEB9C; color:#9C6500; padding:1px 8px; border-radius:6px; font-weight:600;">สาย = มาสาย</span> | '
