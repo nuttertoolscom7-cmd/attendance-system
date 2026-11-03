@@ -845,6 +845,168 @@ def missing_scan_to_excel_bytes(df_all: pd.DataFrame, dept_label: str = ""):
         
     return output.getvalue()
 
+def build_never_late_summary(df_scope: pd.DataFrame, only_active: bool = False):
+    """
+    สร้างตารางสรุปรายชื่อบุคลากรที่ไม่เคยมาสาย (0 ครั้ง)
+    พร้อมสถิติวันที่มาปฏิบัติงาน เวลาเฉลี่ย และการประเมินวินัย
+    """
+    if df_scope.empty:
+        return pd.DataFrame()
+        
+    late_people = set(df_scope[df_scope['สถานะ'].str.contains('สาย', na=False)]['ชื่อ-สกุล'].unique())
+    all_people = df_scope['ชื่อ-สกุล'].unique()
+    never_late_people = [p for p in all_people if p not in late_people]
+    
+    roster = get_active_roster()
+    roster_order_map = {re.sub(r'\s+', '', p['name']): i for i, p in enumerate(roster)}
+    def _sort_key(name: str):
+        clean_k = re.sub(r'\s+', '', name)
+        if clean_k in roster_order_map:
+            return (0, roster_order_map[clean_k])
+        core_k = clean_core_key(clean_k)
+        for p_name, idx in roster_order_map.items():
+            if clean_core_key(p_name) == core_k or p_name.startswith(clean_k) or clean_k.startswith(p_name):
+                return (0, idx)
+        return (1, name)
+        
+    never_late_people = sorted(never_late_people, key=_sort_key)
+    
+    rows = []
+    for name in never_late_people:
+        p_df = df_scope[df_scope['ชื่อ-สกุล'] == name]
+        dept = p_df['แผนก'].dropna().iloc[0] if not p_df['แผนก'].dropna().empty else "ไม่ระบุฝ่าย"
+        
+        in_times = p_df['เข้างาน'].dropna().tolist()
+        mins_list = []
+        for t in in_times:
+            try:
+                h, m = map(int, str(t).split(':'))
+                mins_list.append(h * 60 + m)
+            except Exception:
+                pass
+                
+        avg_time_str = "-"
+        min_time_str = "-"
+        if mins_list:
+            avg_m = int(sum(mins_list) / len(mins_list))
+            avg_time_str = f"{avg_m // 60:02d}:{avg_m % 60:02d}"
+            earliest_m = min(mins_list)
+            min_time_str = f"{earliest_m // 60:02d}:{earliest_m % 60:02d}"
+            
+        on_time_days = len(p_df[p_df['สถานะ'] == 'ปกติ'])
+        work_days = len(in_times)
+        forget_count = len(p_df[p_df['สถานะ'].isin(['ลืมสแกนนิ้วเข้า', 'ลืมสแกนนิ้วออก'])])
+        absent_count = len(p_df[p_df['สถานะ'].isin(['ขาดงาน', 'ขาดงานครึ่งบ่าย', 'ขาดงานครึ่งเช้า'])])
+        
+        if only_active and work_days == 0:
+            continue
+            
+        if absent_count == 0 and forget_count == 0 and work_days > 0:
+            badge = "🌟 วินัยดีเด่น (มาครบ ไม่ขาด ไม่สาย)"
+        elif absent_count == 0 and work_days > 0:
+            badge = "👍 ตรงเวลา (ไม่เคยสาย ไม่มีขาด)"
+        elif work_days > 0:
+            badge = "✅ ไม่เคยสาย"
+        else:
+            badge = "⚪ ไม่มีบันทึกเวลาสแกนเข้า"
+            
+        rows.append({
+            'แผนก': dept,
+            'ชื่อ-สกุล': name,
+            'มาทำงาน (วัน)': work_days,
+            'ตรงเวลา (วัน)': on_time_days,
+            'เวลาเข้างานเฉลี่ย': avg_time_str,
+            'เข้างานเร็วที่สุด': min_time_str,
+            'ลืมสแกน (ครั้ง)': forget_count,
+            'ขาดงาน (ครั้ง)': absent_count,
+            'ผลการประเมิน': badge
+        })
+        
+    res_df = pd.DataFrame(rows)
+    if not res_df.empty:
+        dept_rank = {d: i for i, d in enumerate(REPORT_DEPT_ORDER)}
+        res_df['__d_rank'] = res_df['แผนก'].map(lambda d: dept_rank.get(d, 99))
+        res_df = res_df.sort_values('__d_rank').drop(columns=['__d_rank']).reset_index(drop=True)
+    return res_df
+
+def never_late_to_excel_bytes(df_all: pd.DataFrame, dept_label: str = "", only_active: bool = False):
+    """ส่งออกรายงานรายชื่อผู้ปฏิบัติงานตรงต่อเวลา (ไม่พบประวัติการมาสาย) เป็นไฟล์ Excel มาตรฐาน"""
+    output = BytesIO()
+    if df_all.empty:
+        with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+            pd.DataFrame().to_excel(writer, sheet_name="Punctual_Attendance")
+        return output.getvalue()
+        
+    df_res = build_never_late_summary(df_all, only_active=only_active)
+    valid_dates = df_all["วันที่"].dropna()
+    month_th = month_name_thai(int(valid_dates.dt.month.mode()[0])) if not valid_dates.empty else "ไม่ระบุ"
+    year_be_header = int(valid_dates.dt.year.mode()[0]) + 543 if not valid_dates.empty else ""
+    
+    all_people_count = df_all["ชื่อ-สกุล"].nunique()
+    punctual_pct = (len(df_res) / all_people_count * 100) if all_people_count > 0 else 0
+
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        workbook = writer.book
+        worksheet = workbook.add_worksheet("ผู้ปฏิบัติงานตรงเวลา")
+        
+        base_font = "TH SarabunPSK"
+        title_format = workbook.add_format({"bold": True, "font_name": base_font, "font_size": 18, "align": "center"})
+        subtitle_format = workbook.add_format({"bold": True, "font_name": base_font, "font_size": 16, "align": "center"})
+        summary_bar_format = workbook.add_format({"bold": True, "font_name": base_font, "font_size": 14, "align": "center", "valign": "vcenter", "border": 1, "bg_color": "#E2EFDA", "color": "#276A3C"})
+        header_format = workbook.add_format({"bold": True, "font_name": base_font, "font_size": 14, "align": "center", "valign": "vcenter", "border": 1, "bg_color": "#D9E1F2"})
+        dept_format = workbook.add_format({"bold": True, "font_name": base_font, "font_size": 14, "align": "left", "valign": "vcenter", "border": 1, "bg_color": "#F2F2F2"})
+        data_center_format = workbook.add_format({"font_name": base_font, "font_size": 14, "align": "center", "valign": "vcenter", "border": 1})
+        data_left_format = workbook.add_format({"font_name": base_font, "font_size": 14, "align": "left", "valign": "vcenter", "border": 1})
+        
+        sub_title = f" ({dept_label})" if dept_label and dept_label != "ทั้งหมด" else ""
+        worksheet.merge_range("A1:I1", f"รายงานรายชื่อเจ้าหน้าที่ผู้ปฏิบัติงานตรงต่อเวลา (ไม่พบประวัติการมาสาย){sub_title}", title_format)
+        worksheet.merge_range("A2:I2", "ศูนย์ฝึกพาณิชย์นาวี", title_format)
+        worksheet.merge_range("A3:I3", f"ประจำเดือน {month_th} {year_be_header}", subtitle_format)
+        
+        summary_text = f"สรุป: จำนวนผู้ไม่เคยมาสาย {len(df_res)} คน (คิดเป็น {punctual_pct:.1f}% ของบุคลากรทั้งหมด {all_people_count} คน)"
+        worksheet.merge_range("A4:I4", summary_text, summary_bar_format)
+        worksheet.set_row(3, 22)
+        
+        headers = ["ลำดับ", "ชื่อ - สกุล", "มาทำงาน (วัน)", "ตรงเวลา (วัน)", "เวลาเข้างานเฉลี่ย", "เข้างานเร็วที่สุด", "ลืมสแกน (ครั้ง)", "ขาดงาน (ครั้ง)", "ผลการประเมิน"]
+        worksheet.set_row(4, 24)
+        for col_num, h_text in enumerate(headers):
+            worksheet.write(4, col_num, h_text, header_format)
+            
+        curr_row = 5
+        global_idx = 1
+        
+        if not df_res.empty:
+            depts_present = [d for d in REPORT_DEPT_ORDER if d in df_res["แผนก"].values]
+            depts_other = [d for d in df_res["แผนก"].unique() if d not in REPORT_DEPT_ORDER]
+            for dept in depts_present + depts_other:
+                sub = df_res[df_res["แผนก"] == dept]
+                if sub.empty: continue
+                worksheet.set_row(curr_row, 22)
+                worksheet.merge_range(curr_row, 0, curr_row, 8, f"🏢 ฝ่าย/กลุ่มงาน: {dept} (จำนวน {len(sub)} คน)", dept_format)
+                curr_row += 1
+                for _, r in sub.iterrows():
+                    worksheet.set_row(curr_row, 20)
+                    worksheet.write(curr_row, 0, global_idx, data_center_format)
+                    worksheet.write(curr_row, 1, r["ชื่อ-สกุล"], data_left_format)
+                    worksheet.write(curr_row, 2, r["มาทำงาน (วัน)"], data_center_format)
+                    worksheet.write(curr_row, 3, r["ตรงเวลา (วัน)"], data_center_format)
+                    worksheet.write(curr_row, 4, r["เวลาเข้างานเฉลี่ย"], data_center_format)
+                    worksheet.write(curr_row, 5, r["เข้างานเร็วที่สุด"], data_center_format)
+                    worksheet.write(curr_row, 6, r["ลืมสแกน (ครั้ง)"], data_center_format)
+                    worksheet.write(curr_row, 7, r["ขาดงาน (ครั้ง)"], data_center_format)
+                    worksheet.write(curr_row, 8, r["ผลการประเมิน"], data_left_format)
+                    curr_row += 1
+                    global_idx += 1
+                    
+        worksheet.set_column("A:A", 8)
+        worksheet.set_column("B:B", 32)
+        worksheet.set_column("C:D", 14)
+        worksheet.set_column("E:F", 16)
+        worksheet.set_column("G:H", 14)
+        worksheet.set_column("I:I", 30)
+        
+    return output.getvalue()
+
 # -------------------------
 # PDF Parsing
 # -------------------------
@@ -1498,6 +1660,21 @@ def style_status_table(df: pd.DataFrame):
     subset = ['สถานะ'] if "สถานะ" in df.columns else None
     return df.style.map(highlight, subset=subset) if hasattr(df.style, "map") else df.style.applymap(highlight, subset=subset)
 
+def style_never_late_table(df: pd.DataFrame):
+    def highlight_badge(val):
+        val_str = str(val)
+        if "วินัยดีเด่น" in val_str:
+            return "background-color: #DCFCE7; color: #166534; font-weight: 700; text-align: left;"
+        elif "ไม่เคยสาย ไม่มีขาด" in val_str:
+            return "background-color: #FEF9C3; color: #854D0E; font-weight: 600; text-align: left;"
+        elif "ไม่เคยสาย" in val_str:
+            return "background-color: #EFF6FF; color: #1E40AF; font-weight: 500; text-align: left;"
+        elif "ไม่มีบันทึก" in val_str:
+            return "background-color: #F1F5F9; color: #64748B; font-weight: 500; text-align: left;"
+        return ""
+    subset = ['ผลการประเมิน'] if 'ผลการประเมิน' in df.columns else None
+    return df.style.map(highlight_badge, subset=subset) if hasattr(df.style, "map") else df.style.applymap(highlight_badge, subset=subset)
+
 # -------------------------
 # UI Header Banner
 # -------------------------
@@ -1660,6 +1837,92 @@ if 'master_df' in st.session_state:
         sel_dept_month = st.selectbox("🏢 กรองตามฝ่าย/กลุ่มงาน:", dept_options, key="month_dept")
         df_month = filter_by_dept(master_df, sel_dept_month)
 
+        valid_m_dates = master_df['วันที่'].dropna()
+        rep_month_th = month_name_thai(int(valid_m_dates.dt.month.mode()[0])) if not valid_m_dates.empty else ""
+        rep_year_be = int(valid_m_dates.dt.year.mode()[0]) + 543 if not valid_m_dates.empty else ""
+        dept_month_tag = f"_{sel_dept_month}" if sel_dept_month != "ทั้งหมด" else ""
+
+        # คำนวณสถิติผู้ไม่เคยมาสาย
+        late_people_set = set(df_month[df_month['สถานะ'].str.contains('สาย', na=False)]['ชื่อ-สกุล'].unique())
+        all_month_people_set = set(df_month['ชื่อ-สกุล'].unique())
+        never_late_set = all_month_people_set - late_people_set
+        m_never_late_count = len(never_late_set)
+        total_people_month = len(all_month_people_set)
+        m_never_late_pct = (m_never_late_count / total_people_month * 100) if total_people_month > 0 else 0
+
+        # ส่วนสรุปภาพรวมรายเดือน (ผู้ไม่เคยสาย / ลืมสแกน / ขาดงาน / วันลา)
+        monthly_summary_title = "### 📊 สรุปภาพรวมรายเดือน" + (f" - {sel_dept_month}" if sel_dept_month != "ทั้งหมด" else "")
+        st.markdown(monthly_summary_title)
+        m_forget_in_count = df_month[df_month['สถานะ'] == 'ลืมสแกนนิ้วเข้า']['ชื่อ-สกุล'].nunique()
+        m_forget_out_count = df_month[df_month['สถานะ'] == 'ลืมสแกนนิ้วออก']['ชื่อ-สกุล'].nunique()
+        m_absent_count = df_month[df_month['สถานะ'].isin(['ขาดงาน', 'ขาดงานครึ่งบ่าย', 'ขาดงานครึ่งเช้า'])]['ชื่อ-สกุล'].nunique()
+        m_leave_count = df_month[df_month['มีใบลา'] == True]['ชื่อ-สกุล'].nunique() if 'มีใบลา' in df_month.columns else 0
+
+        c_m1, c_m2, c_m3, c_m4, c_m5 = st.columns(5)
+        c_m1.metric("🌟 ไม่เคยมาสายเลย", f"{m_never_late_count} คน", f"{m_never_late_pct:.1f}% ของกลุ่ม")
+        c_m2.metric("👤 ลืมสแกนเข้า", f"{m_forget_in_count} คน")
+        c_m3.metric("👤 ลืมสแกนออก", f"{m_forget_out_count} คน")
+        c_m4.metric("❌ ขาดงานจริง (ไม่มีใบลา)", f"{m_absent_count} คน")
+        c_m5.metric("🏖️ มีใบลาถูกต้อง", f"{m_leave_count} คน")
+        st.markdown("---")
+
+        # ----------------------------------------------------
+        # ส่วนรายงานบุคลากรผู้ไม่เคยมาสาย (Punctual Attendance Report)
+        # ----------------------------------------------------
+        st.markdown(f"### 🌟 รายงานบุคลากรผู้ไม่เคยมาสาย ประจำเดือน {rep_month_th} {rep_year_be}" + (f" - {sel_dept_month}" if sel_dept_month != "ทั้งหมด" else ""))
+        
+        st.markdown(
+            '<div style="background:#fefce8; border:1.5px solid #fde047; border-left:6px solid #eab308; border-radius:8px; padding:12px 18px; margin-bottom:14px; font-size:0.92rem; box-shadow:2px 3px 8px rgba(0,0,0,0.04);">'
+            f'<span><b>✨ รายชื่อเจ้าหน้าที่ผู้มีวินัยตรงต่อเวลา:</b> พบผู้ไม่เคยมีประวัติมาสายเลยจำนวน <b>{m_never_late_count} คน</b> (คิดเป็น <b>{m_never_late_pct:.1f}%</b> ของเจ้าหน้าที่ทั้งหมดในกลุ่มนี้)</span>'
+            '</div>',
+            unsafe_allow_html=True
+        )
+
+        c_nl_search, c_nl_act, c_nl_dl = st.columns([1.8, 1.4, 1.4])
+        with c_nl_search:
+            search_never_late = st.text_input("🔍 ค้นหาชื่อในกลุ่มไม่สาย:", placeholder="พิมพ์ชื่อเพื่อค้นหา...", key="search_never_late")
+        with c_nl_act:
+            only_active_never_late = st.checkbox("แสดงเฉพาะผู้ที่มีเวลามาทำงานจริง", value=True, help="ไม่แสดงผู้ที่ไม่มีการสแกนนิ้วเลยตลอดทั้งเดือน", key="only_active_never_late")
+        
+        never_late_df = build_never_late_summary(df_month, only_active=only_active_never_late)
+        
+        with c_nl_dl:
+            st.download_button(
+                "📥 ดาวน์โหลดรายชื่อ (Excel)",
+                never_late_to_excel_bytes(df_month, sel_dept_month, only_active=only_active_never_late),
+                f"punctual_personnel_{rep_month_th}_{rep_year_be}{dept_month_tag}.xlsx",
+                use_container_width=True,
+                key="btn_dl_never_late_top"
+            )
+
+        if not never_late_df.empty:
+            display_nl_df = never_late_df.copy()
+            if search_never_late:
+                display_nl_df = display_nl_df[display_nl_df['ชื่อ-สกุล'].str.contains(search_never_late.strip(), na=False)]
+            
+            nl_active_count = len(display_nl_df)
+            best_discipline = display_nl_df[display_nl_df['ผลการประเมิน'].str.contains('วินัยดีเด่น', na=False)]
+            
+            c_p1, c_p2, c_p3 = st.columns(3)
+            c_p1.info(f"👥 แสดงผล: **{nl_active_count} คน** จากผู้ไม่เคยสายทั้งหมด {m_never_late_count} คน")
+            c_p2.success(f"🏅 วินัยดีเด่น (สแกนครบ 100%): **{len(best_discipline)} คน**")
+            
+            valid_earliest = display_nl_df[display_nl_df['เข้างานเร็วที่สุด'] != '-']
+            if not valid_earliest.empty:
+                earliest_row = valid_earliest.sort_values('เข้างานเร็วที่สุด').iloc[0]
+                c_p3.warning(f"🏃 มาเช้าสุด: **{earliest_row['ชื่อ-สกุล']}** ({earliest_row['เข้างานเร็วที่สุด']} น.)")
+            else:
+                c_p3.info("⏰ บันทึกเวลาเข้างานเรียบร้อย")
+
+            display_nl_df.insert(0, 'ที่', range(1, len(display_nl_df) + 1))
+            st.dataframe(style_never_late_table(display_nl_df), use_container_width=True, hide_index=True)
+        else:
+            st.info("ไม่พบรายชื่อที่ตรงกับเงื่อนไขการค้นหา")
+
+        st.markdown("---")
+        # ----------------------------------------------------
+        # สถิติการมาสาย
+        # ----------------------------------------------------
         if sel_dept_month == "ทั้งหมด":
             st.subheader("🏢 การมาสายแยกตามฝ่าย")
             dept_stat = pd.crosstab(master_df['แผนก'].replace({'': 'ไม่ระบุฝ่าย'}), master_df['สถานะ']).fillna(0)
@@ -1676,19 +1939,6 @@ if 'master_df' in st.session_state:
             else:
                 st.info(f"✨ ยอดเยี่ยม! ไม่พบประวัติการมาสายในกลุ่ม {sel_dept_month}")
 
-        # เพิ่มส่วนสรุปภาพรวมรายเดือน
-        monthly_summary_title = "### 📊 สรุปภาพรวมรายเดือน (ลืมสแกน/ขาดงาน/วันลา)" + (f" - {sel_dept_month}" if sel_dept_month != "ทั้งหมด" else "")
-        st.markdown(monthly_summary_title)
-        m_forget_in_count = df_month[df_month['สถานะ'] == 'ลืมสแกนนิ้วเข้า']['ชื่อ-สกุล'].nunique()
-        m_forget_out_count = df_month[df_month['สถานะ'] == 'ลืมสแกนนิ้วออก']['ชื่อ-สกุล'].nunique()
-        m_absent_count = df_month[df_month['สถานะ'].isin(['ขาดงาน', 'ขาดงานครึ่งบ่าย', 'ขาดงานครึ่งเช้า'])]['ชื่อ-สกุล'].nunique()
-        m_leave_count = df_month[df_month['มีใบลา'] == True]['ชื่อ-สกุล'].nunique() if 'มีใบลา' in df_month.columns else 0
-
-        c_m1, c_m2, c_m3, c_m4 = st.columns(4)
-        c_m1.metric("👤 ลืมสแกนเข้า", f"{m_forget_in_count} คน")
-        c_m2.metric("👤 ลืมสแกนออก", f"{m_forget_out_count} คน")
-        c_m3.metric("❌ ขาดงานจริง (ไม่มีใบลา)", f"{m_absent_count} คน")
-        c_m4.metric("🏖️ มีใบลาถูกต้อง", f"{m_leave_count} คน")
         st.markdown("---")
 
         valid_m_dates = master_df['วันที่'].dropna()
@@ -1726,8 +1976,7 @@ if 'master_df' in st.session_state:
             rep_df, hol_days, _, _ = build_monthly_report_table(df_month, master_df, exclude_weekends, exclude_th_holidays, extra_holidays)
             st.dataframe(style_monthly_report_table(rep_df, hol_days), use_container_width=True, hide_index=True)
 
-        dept_month_tag = f"_{sel_dept_month}" if sel_dept_month != "ทั้งหมด" else ""
-        col_dl1, col_dl2 = st.columns(2)
+        col_dl1, col_dl2, col_dl3 = st.columns(3)
         with col_dl1:
             dl_sum_label = "📥 ดาวน์โหลดรายงานประจำเดือน (Excel รูปแบบมาตรฐาน 4 ชีต)" if sel_dept_month == "ทั้งหมด" else f"📥 ดาวน์โหลดรายงานประจำเดือน (Excel) - {sel_dept_month}"
             st.download_button(
@@ -1737,6 +1986,15 @@ if 'master_df' in st.session_state:
                 use_container_width=True
             )
         with col_dl2:
+            dl_never_late_label = "📥 ดาวน์โหลดรายงานผู้ไม่เคยมาสาย (Excel)" + (f" - {sel_dept_month}" if sel_dept_month != "ทั้งหมด" else "")
+            st.download_button(
+                dl_never_late_label,
+                never_late_to_excel_bytes(df_month, sel_dept_month, only_active=only_active_never_late),
+                f"punctual_personnel_{rep_month_th}_{rep_year_be}{dept_month_tag}.xlsx",
+                use_container_width=True,
+                key="btn_dl_never_late_bottom"
+            )
+        with col_dl3:
             dl_missing_label = "📥 ดาวน์โหลดรายงานลืมสแกน/ขาดงานจริง (Excel)" + (f" - {sel_dept_month}" if sel_dept_month != "ทั้งหมด" else "")
             st.download_button(dl_missing_label, missing_scan_to_excel_bytes(df_month, sel_dept_month), f"missing_scans_report{dept_month_tag}.xlsx", use_container_width=True)
 
