@@ -15,6 +15,7 @@ import holidays
 import unicodedata
 from difflib import SequenceMatcher
 from data_parser import load_data
+import db_manager as dbm
 
 # -------------------------
 # ตั้งค่าหน้าเว็บและ CSS
@@ -1680,9 +1681,15 @@ def style_never_late_table(df: pd.DataFrame):
 # -------------------------
 if 'master_df' in st.session_state:
     _m = st.session_state.master_df
-    status_badge_html = f'<div class="status-badge-ready">🟢 ข้อมูลพร้อม: <b>{len(_m)}</b> รายการ (<b>{_m["ชื่อ-สกุล"].nunique()}</b> คน)</div>'
+    _dates = _m['วันที่'].dropna()
+    _d_count = _dates.nunique() if not _dates.empty else 0
+    status_badge_html = f'<div class="status-badge-ready">🟢 ข้อมูลพร้อม: <b>{len(_m)}</b> รายการ (<b>{_m["ชื่อ-สกุล"].nunique()}</b> คน | <b>{_d_count}</b> วัน)</div>'
 else:
-    status_badge_html = '<div class="status-badge-empty">⚪ รอนำเข้าข้อมูล (เริ่มที่แท็บ 1)</div>'
+    _db_months = dbm.get_available_months()
+    if _db_months:
+        status_badge_html = f'<div class="status-badge-empty">💾 พบข้อมูลในคลัง <b>{len(_db_months)}</b> เดือน (เลือกเปิดในแท็บ 1)</div>'
+    else:
+        status_badge_html = '<div class="status-badge-empty">⚪ รอนำเข้าข้อมูล (เริ่มที่แท็บ 1)</div>'
 
 st.markdown(f"""
 <div class="att-header-container">
@@ -1705,11 +1712,100 @@ st.markdown(f"""
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["📤 นำเข้าข้อมูล", "📅 ภาพรวมรายวัน", "📈 สถิติรายเดือน", "👤 ข้อมูลรายบุคคล", "🏖️ ตรวจสอบเทียบวันลา"])
 
 with tab1:
-    st.header("📤 นำเข้าข้อมูล")
+    st.header("📤 นำเข้าและจัดการข้อมูล")
+
+    # ----------------------------------------------------
+    # ส่วนที่ 1: 📂 คลังข้อมูลย้อนหลังในฐานข้อมูล (Database Archive)
+    # ----------------------------------------------------
+    db_months = dbm.get_available_months()
+    db_stats = dbm.get_database_stats()
+
+    st.markdown("""
+    <div style="background:#fefce8; border:1.5px solid #fde047; border-left:6px solid #eab308; border-radius:8px; padding:14px 20px; margin-bottom:18px; box-shadow:2px 3px 8px rgba(0,0,0,0.04);">
+        <div style="font-weight:700; font-size:1.15rem; color:#854d0e; display:flex; align-items:center; gap:8px;">
+            <span>📂 คลังข้อมูลย้อนหลังในฐานข้อมูล (Database Archive)</span>
+        </div>
+        <div style="font-size:0.92rem; color:#713f12; margin-top:4px;">
+            เลือกเดือนที่เคยบันทึกไว้เพื่อเปิดดูรายงานทันที โดยไม่ต้องอัปโหลดไฟล์ PDF ใหม่
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    col_db1, col_db2 = st.columns([3, 1])
+    with col_db1:
+        if db_months:
+            month_options = {m["label"]: m["ym"] for m in db_months}
+            selected_month_label = st.selectbox(
+                "📅 เลือกเดือนที่ต้องการเปิดดู:",
+                options=list(month_options.keys()),
+                key="select_db_month"
+            )
+            selected_ym = month_options[selected_month_label]
+        else:
+            st.info("ℹ️ ยังไม่มีข้อมูลในฐานข้อมูล (สามารถนำเข้าไฟล์ PDF ด้านล่างเพื่อเริ่มบันทึกข้อมูล)")
+            selected_ym = None
+    with col_db2:
+        st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+        if selected_ym and st.button("📂 โหลดข้อมูลเดือนนี้", type="primary", use_container_width=True):
+            loaded_df = dbm.load_attendance_by_month(selected_ym)
+            if not loaded_df.empty:
+                curr_leave_df = st.session_state.get('leave_df')
+                loaded_df = cross_check_attendance_with_leave(loaded_df, curr_leave_df)
+                st.session_state.master_df = loaded_df
+                st.session_state.current_loaded_month = selected_ym
+                st.success(f"✅ โหลดข้อมูลสำเร็จ: พบ {loaded_df['ชื่อ-สกุล'].nunique()} คน ({len(loaded_df)} บันทึก)")
+                st.rerun()
+
+    # Expander สำหรับดูสถิติและจัดการฐานข้อมูล
+    with st.expander("⚙️ สถิติฐานข้อมูล & จัดการข้อมูล (Database Management)"):
+        c_st1, c_st2, c_st3, c_st4 = st.columns(4)
+        c_st1.metric("📦 ขนาดฐานข้อมูล", db_stats["size_display"])
+        c_st2.metric("👥 บุคลากรทั้งหมด", f"{db_stats['total_people']} คน")
+        c_st3.metric("📅 จำนวนวันที่บันทึก", f"{db_stats['total_days']} วัน")
+        c_st4.metric("🗓️ จำนวนเดือนที่บันทึก", f"{db_stats['total_months']} เดือน")
+        
+        c_mg1, c_mg2 = st.columns([2, 1])
+        with c_mg1:
+            if db_months:
+                del_month_label = st.selectbox(
+                    "🗑️ เลือกรอบเดือนที่ต้องการลบ:",
+                    options=list(month_options.keys()),
+                    key="select_del_month"
+                )
+                if st.button("🗑️ ยืนยันลบข้อมูลเดือนที่เลือก", type="secondary"):
+                    del_ym = month_options[del_month_label]
+                    del_count = dbm.delete_month_attendance(del_ym)
+                    st.warning(f"ลบข้อมูลรอบเดือน {del_month_label} สำเร็จ ({del_count} รายการ)")
+                    if st.session_state.get("current_loaded_month") == del_ym:
+                        st.session_state.pop("master_df", None)
+                        st.session_state.pop("current_loaded_month", None)
+                    st.rerun()
+        with c_mg2:
+            st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+            db_bytes = dbm.get_database_bytes()
+            if db_bytes:
+                st.download_button(
+                    "📥 สำรองฐานข้อมูล (.db)",
+                    db_bytes,
+                    "attendance_backup.db",
+                    mime="application/x-sqlite3",
+                    use_container_width=True
+                )
+
+    st.markdown("---")
+
+    # ----------------------------------------------------
+    # ส่วนที่ 2: 📤 นำเข้าข้อมูลใหม่ (PDF รายวัน / รายเดือน)
+    # ----------------------------------------------------
+    st.markdown("### 📤 นำเข้าข้อมูลใหม่ (รองรับทั้งไฟล์รายวันและรายเดือน)")
     col_u1, col_u2 = st.columns([1, 1])
     with col_u1:
         st.subheader("1. 📄 ข้อมูลสแกนนิ้ว (PDF)")
-        uploaded_files = st.file_uploader("ลากไฟล์ PDF สแกนนิ้วมาวางตรงนี้", type="pdf", accept_multiple_files=True)
+        uploaded_files = st.file_uploader(
+            "ลากไฟล์ PDF สแกนนิ้วมาวางตรงนี้ (เลือกได้หลายไฟล์พร้อมกัน เช่น รวมไฟล์รายวัน)",
+            type="pdf",
+            accept_multiple_files=True
+        )
     with col_u2:
         st.subheader("2. 📊 ตารางวันลา (Excel)")
         uploaded_leave = st.file_uploader("อัปโหลดไฟล์ตารางวันลา เพื่อตรวจเทียบอัตโนมัติ (.xlsx, .csv)", type=["xlsx", "csv"], key="attendance_leave_uploader")
@@ -1728,7 +1824,15 @@ with tab1:
         elif 'leave_df' in st.session_state and st.session_state.leave_df is not None:
             st.info(f"💡 พบข้อมูลตารางวันลาในระบบแล้ว: {len(st.session_state.leave_df)} รายการ (พร้อมตรวจเทียบ)")
 
-    if uploaded_files and st.button("🚀 ประมวลผลข้อมูล", type="primary"):
+    col_btn_opt, col_btn_act = st.columns([2, 1])
+    with col_btn_opt:
+        auto_save_db = st.checkbox(
+            "💾 บันทึกลงฐานข้อมูลอัตโนมัติ (Smart Merge สะสมรายวัน)",
+            value=True,
+            help="นำเข้าข้อมูลเข้าสู่ฐานข้อมูลโดยตรง หากมีข้อมูลวันเดิมอยู่แล้วจะอัปเดตให้อัตโนมัติ ป้องกันข้อมูลสูญหาย"
+        )
+
+    if uploaded_files and st.button("🚀 ประมวลผลและนำเข้าข้อมูล", type="primary"):
         all_data, all_skipped = [], []
         for f in uploaded_files:
             df, skipped = process_pdf(f, LATE_THRESHOLD_MINUTES, exclude_weekends, exclude_th_holidays, extra_holidays)
@@ -1744,8 +1848,13 @@ with tab1:
             master_df = cross_check_attendance_with_leave(master_df, curr_leave_df)
             st.session_state.master_df = master_df
             
+            save_msg = ""
+            if auto_save_db:
+                save_res = dbm.save_attendance_dataframe(master_df, source_label=f"นำเข้า {len(uploaded_files)} ไฟล์ ({datetime.now().strftime('%d/%m/%Y %H:%M')})")
+                save_msg = f" 💾 บันทึกเข้าฐานข้อมูลเรียบร้อยแล้ว ({save_res['saved_count']} รายการ | สะสม {save_res['days_count']} วันทำการ)"
+            
             leave_note = " และตรวจเทียบกับตารางวันลาแล้ว" if curr_leave_df is not None and not curr_leave_df.empty else ""
-            st.success(f"✅ ประมวลผลสำเร็จ{leave_note}! รวม {master_df['ชื่อ-สกุล'].nunique()} คน ({len(master_df)} บันทึก)")
+            st.success(f"✅ ประมวลผลสำเร็จ{leave_note}! รวม {master_df['ชื่อ-สกุล'].nunique()} คน ({len(master_df)} บันทึก){save_msg}")
             
             # แสดงสรุปสถิติจำนวนคนแยกตามฝ่าย
             dept_counts = master_df.drop_duplicates(subset=['ชื่อ-สกุล']).groupby(
@@ -1761,6 +1870,18 @@ with tab1:
         if all_skipped:
             with st.expander(f"⚠️ บรรทัดที่อ่านไม่ได้ {len(all_skipped)} บรรทัด (กดเพื่อตรวจสอบ)"):
                 st.text("\n".join(all_skipped))
+
+    # ปุ่มบันทึกลงฐานข้อมูลเพิ่มเติม (กรณีมีข้อมูลในหน่วยความจำแล้ว)
+    if 'master_df' in st.session_state and st.session_state.master_df is not None:
+        st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+        c_sync1, c_sync2 = st.columns([2.5, 1])
+        with c_sync1:
+            st.info(f"💡 ขณะนี้มีข้อมูลในระบบ: **{len(st.session_state.master_df)}** รายการ ({st.session_state.master_df['ชื่อ-สกุล'].nunique()} คน | {st.session_state.master_df['วันที่'].nunique()} วัน)")
+        with c_sync2:
+            if st.button("💾 บันทึก/อัปเดตลงฐานข้อมูล", use_container_width=True):
+                save_res = dbm.save_attendance_dataframe(st.session_state.master_df, source_label=f"บันทึกผ่านระบบ ({datetime.now().strftime('%d/%m/%Y %H:%M')})")
+                st.success(f"✅ บันทึกสำเร็จ: {save_res['saved_count']} รายการ ({save_res['dates_summary']})")
+                st.rerun()
 
 if 'master_df' in st.session_state:
     master_df = st.session_state.master_df
